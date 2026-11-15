@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>THE DICE SANCTUM</title>
+    <link rel="stylesheet" href="./stile.css" />
+  </head>
+  <body>
+    <header id="testata">
+      <h1>THE DICE SANCTUM</h1>
+      <div id="richieste" hidden></div>
+      <button id="apri-cronaca" type="button" aria-controls="cronaca" aria-expanded="false">Chronicle</button>
+      <div id="stato" class="scollegato">disconnected</div>
+    </header>
+    <main>
+      <aside id="dadi" aria-label="Dice"><h2>Dice</h2></aside>
+      <section id="vassoio">
+        <div id="tela"></div>
+        <div id="risultato" hidden></div>
+        <div id="avviso" hidden></div>
+        <div id="caricamento">setting the table…</div>
+      </section>
+      <aside id="cronaca" aria-label="Chronicle">
+        <h2>Chronicle</h2>
+        <ol id="voci"></ol>
+      </aside>
+    </main>
+    <footer id="comandi">
+      <div class="campi">
+        <input id="formula" type="text" placeholder="formula, e.g. 1d20+5" autocomplete="off" spellcheck="false" maxlength="200" />
+        <input id="etichetta" type="text" placeholder="label (optional)" autocomplete="off" maxlength="80" />
+        <div class="pulsanti">
+          <button id="tira" type="button" class="grande">ROLL</button>
+          <button id="vantaggio" type="button">ADVANTAGE</button>
+          <button id="svantaggio" type="button">DISADVANTAGE</button>
+          <button id="pulisci" type="button">CLEAR</button>
+        </div>
+      </div>
+      <div id="errore" role="alert"></div>
+    </footer>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

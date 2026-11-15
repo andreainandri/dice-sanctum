@@ -1,0 +1,838 @@
+/* Il tavolo nello studio di un mago: noce, velluto e ottone antico, col borgogna; l'ambra per quello che chiede il DM, lo smeraldo per il collegamento. */
+
+@font-face {
+  font-family: "Sanctum Serif";
+  src: url("./caratteri/NotoSerif-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Sanctum Serif";
+  src: url("./caratteri/NotoSerif-SemiBold.woff2") format("woff2");
+  font-weight: 600;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Sanctum Serif";
+  src: url("./caratteri/NotoSerif-Bold.woff2") format("woff2");
+  font-weight: 700;
+  font-display: swap;
+}
+
+:root {
+  --carbone: #0b0908;
+  --bordo: #3a2a1c;
+  --ottone: #b8955a;
+  --ottone-chiaro: #dcc08a;
+  --ottone-scuro: #6f5634;
+  --borgogna: #6b1824;
+  --ambra: #e2a33c;
+  --smeraldo: #3f9a6e;
+  --testo: #ece2cf;
+  --tenue: #9d8f78;
+  --spento: #64584a;
+  --oro: #e8c66a;
+  --rosso: #d65a48;
+  --serif: "Sanctum Serif", "Noto Serif", "DejaVu Serif", serif;
+  --mono: ui-monospace, "DejaVu Sans Mono", monospace;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  display: grid;
+  /* Una colonna larga quanto la finestra: niente di quello che sta dentro può allargarla. */
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  background: var(--carbone);
+  color: var(--testo);
+  font: 15px/1.45 var(--serif);
+  /* Sotto i 440 punti di altezza la pagina scorre: il vassoio non scende sotto una misura che si legge. */
+  min-height: 440px;
+  overflow: hidden auto;
+}
+
+/* La pagina resta nascosta finché non ha i testi nella sua lingua (preparaLingua). */
+html:not(.pronta) body {
+  visibility: hidden;
+}
+
+/* La testata */
+#testata {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 10px 22px;
+  min-height: 58px;
+  background: linear-gradient(#1b140f, #110c09);
+  border-bottom: 1px solid var(--ottone-scuro);
+  box-shadow: 0 1px 0 rgba(220, 192, 138, 0.07), 0 6px 18px rgba(0, 0, 0, 0.5);
+}
+
+#testata h1 {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: 0.32em;
+  color: var(--ottone);
+  white-space: nowrap;
+  text-shadow: 0 1px 0 #000;
+}
+
+/* Due piccoli rombi d'ottone ai lati del titolo. */
+#testata h1::before,
+#testata h1::after {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border: 1px solid var(--ottone-scuro);
+  transform: rotate(45deg);
+}
+
+#richieste {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 6px 8px 6px 16px;
+  border: 1px solid rgba(226, 163, 60, 0.45);
+  border-left: 3px solid var(--ambra);
+  border-radius: 3px;
+  background: linear-gradient(90deg, rgba(107, 24, 36, 0.6), rgba(38, 17, 13, 0.6));
+  box-shadow: inset 0 0 18px rgba(0, 0, 0, 0.45);
+  font-size: 16px;
+}
+
+#richieste[hidden] {
+  display: none;
+}
+
+#richieste .chiede strong {
+  color: var(--ottone-chiaro);
+  font-weight: 600;
+}
+
+#richieste .tira-richiesta {
+  margin-left: auto;
+  min-width: 104px;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  color: #f6e3b8;
+  border-color: var(--ottone);
+  background: linear-gradient(#8a2432, #5e1520);
+}
+
+#richieste .in-fila {
+  color: var(--tenue);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+/* Il pulsante della cronaca serve soltanto alle finestre strette, dove la cronaca entra da destra. */
+#apri-cronaca {
+  display: none;
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--ottone);
+}
+
+body.cronaca-aperta #apri-cronaca {
+  color: var(--ottone-chiaro);
+  border-color: var(--ottone);
+}
+
+#stato {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--tenue);
+  font-size: 13px;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+
+#stato::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--smeraldo);
+  box-shadow: 0 0 6px rgba(63, 154, 110, 0.55);
+}
+
+#stato.scollegato {
+  color: var(--rosso);
+}
+
+#stato.scollegato::before {
+  background: var(--rosso);
+  box-shadow: 0 0 6px rgba(214, 90, 72, 0.6);
+}
+
+main {
+  position: relative;
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr) 340px;
+  min-height: 0;
+}
+
+/* I titoli delle due colonne */
+#dadi h2,
+#cronaca h2 {
+  margin: 0 0 6px;
+  padding: 14px 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: var(--ottone);
+  border-bottom: 1px solid var(--bordo);
+}
+
+/* Il pannello dei dadi */
+#dadi {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 12px 12px;
+  background: linear-gradient(90deg, #140f0b, #1a130e);
+  border-right: 1px solid var(--bordo);
+  box-shadow: inset -10px 0 18px rgba(0, 0, 0, 0.35);
+}
+
+.dado {
+  display: grid;
+  grid-template-columns: 1fr 24px 26px 26px;
+  align-items: center;
+  gap: 4px;
+}
+
+.dado .nome {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 6px;
+  text-align: left;
+  font-size: 15px;
+  font-weight: 600;
+  background: none;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.dado .nome svg {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  color: var(--ottone);
+}
+
+.dado .nome:hover:not(:disabled) {
+  background: rgba(184, 149, 90, 0.08);
+  border-color: var(--ottone-scuro);
+}
+
+.dado .quanti {
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  color: var(--ottone-chiaro);
+}
+
+.dado .quanti.zero {
+  font-weight: 400;
+  color: var(--spento);
+}
+
+button {
+  font: inherit;
+  color: var(--testo);
+  background: linear-gradient(#2a1f17, #1c140f);
+  border: 1px solid var(--ottone-scuro);
+  border-radius: 3px;
+  padding: 6px 12px;
+  cursor: pointer;
+  box-shadow: inset 0 1px 0 rgba(220, 192, 138, 0.1), 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+
+button:hover:not(:disabled) {
+  color: #fff4dd;
+  border-color: var(--ottone);
+  background: linear-gradient(#34271d, #231913);
+}
+
+button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.dado button.meno,
+.dado button.piu {
+  height: 26px;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 15px;
+  line-height: 1;
+  color: var(--ottone-chiaro);
+}
+
+/* Il vassoio */
+#vassoio {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* Gli angoli della scena scuriscono, come fuori dalla luce della lampada. */
+#vassoio::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background: radial-gradient(ellipse 75% 70% at 50% 52%, transparent 60%, rgba(0, 0, 0, 0.5) 100%);
+}
+
+#tela,
+#tela canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+#caricamento {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  color: var(--tenue);
+  letter-spacing: 0.2em;
+}
+
+#risultato {
+  position: absolute;
+  z-index: 2;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  text-align: center;
+  pointer-events: none;
+}
+
+/* Il totale cala con l'altezza della finestra, come la fascia che la scena gli lascia in alto. */
+#risultato .totale {
+  font-size: clamp(44px, 8.5vh, 84px);
+  font-weight: 700;
+  line-height: 1;
+  color: #f3e7cf;
+  text-shadow: 0 2px 0 #000, 0 6px 26px rgba(0, 0, 0, 0.85);
+}
+
+#risultato .naturale {
+  margin-top: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.4em;
+  text-shadow: 0 1px 4px #000;
+}
+
+#risultato.nat20 .totale {
+  color: var(--oro);
+  text-shadow: 0 2px 0 #000, 0 0 24px rgba(232, 198, 106, 0.35);
+  animation: oro 0.9s ease-out;
+}
+
+#risultato.nat20 .naturale {
+  color: var(--oro);
+}
+
+#risultato.nat1 .totale,
+#risultato.nat1 .naturale {
+  color: var(--rosso);
+}
+
+/* Il 20 naturale: un lampo breve sul numero, che non trattiene niente. */
+@keyframes oro {
+  from {
+    transform: scale(1.12);
+    filter: brightness(1.6);
+  }
+  to {
+    transform: scale(1);
+    filter: none;
+  }
+}
+
+#avviso {
+  position: absolute;
+  z-index: 2;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  padding: 8px 16px;
+  border-radius: 3px;
+  background: rgba(14, 10, 8, 0.9);
+  border: 1px solid var(--ottone-scuro);
+  font-size: 14px;
+}
+
+#avviso.grave {
+  border-color: var(--rosso);
+  color: #f0a294;
+}
+
+.dado-scartato {
+  opacity: 0.45;
+  text-decoration: line-through;
+}
+
+/* La cronaca */
+#cronaca {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 0 12px;
+  background: linear-gradient(270deg, #140f0b, #1a130e);
+  border-left: 1px solid var(--bordo);
+  box-shadow: inset 10px 0 18px rgba(0, 0, 0, 0.35);
+}
+
+#voci {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 10px;
+  overflow-y: auto;
+}
+
+.voce {
+  padding: 9px 4px;
+  border-bottom: 1px solid rgba(58, 42, 28, 0.75);
+}
+
+.voce .testa {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: 8px;
+  align-items: baseline;
+  font-size: 13px;
+  color: var(--tenue);
+}
+
+.voce .testa time {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.voce .etichetta {
+  font-weight: 600;
+  color: var(--testo);
+}
+
+.voce .formula {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.voce .corpo {
+  margin-top: 3px;
+  font-variant-numeric: tabular-nums;
+  color: #c9bca4;
+}
+
+.voce .corpo .totale {
+  font-size: 19px;
+  font-weight: 700;
+  color: var(--testo);
+}
+
+.voce .note {
+  margin-top: 2px;
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ambra);
+}
+
+.voce .nota-ponte {
+  font-size: 12px;
+  color: var(--tenue);
+}
+
+.voce.dal-dm {
+  padding-left: 10px;
+  border-left: 2px solid rgba(226, 163, 60, 0.6);
+}
+
+/* Da collegati un tiro resta in coda pochi millisecondi: la scritta serve soltanto da scollegati. */
+.voce .attesa {
+  display: none;
+  font-size: 12px;
+  color: var(--rosso);
+}
+
+body.scollegato .voce.in-coda .attesa {
+  display: block;
+}
+
+.voce.nat20 .corpo .totale,
+.voce.nat20 .note {
+  color: var(--oro);
+}
+
+.voce.nat1 .corpo .totale,
+.voce.nat1 .note {
+  color: var(--rosso);
+}
+
+/* I comandi */
+#comandi {
+  position: relative;
+  z-index: 2;
+  padding: 12px 22px;
+  background: linear-gradient(#110c09, #19120e);
+  border-top: 1px solid var(--ottone-scuro);
+  box-shadow: 0 -6px 18px rgba(0, 0, 0, 0.45);
+}
+
+/* Campi e pulsanti su una riga quando c'è posto; sotto, i pulsanti vanno insieme alla riga dopo e la riempiono. */
+.campi,
+.pulsanti {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: stretch;
+}
+
+.pulsanti {
+  flex: 0 0 auto;
+}
+
+.pulsanti button {
+  white-space: nowrap;
+}
+
+input {
+  font: inherit;
+  color: var(--testo);
+  background: #0d0a08;
+  border: 1px solid var(--bordo);
+  border-radius: 3px;
+  padding: 9px 12px;
+  box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.6);
+}
+
+input::placeholder {
+  color: var(--spento);
+}
+
+input:focus {
+  outline: none;
+  border-color: var(--ottone);
+  box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.6), 0 0 0 2px rgba(184, 149, 90, 0.18);
+}
+
+#formula {
+  flex: 3 1 260px;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 17px;
+}
+
+#etichetta {
+  flex: 2 1 170px;
+  min-width: 0;
+}
+
+button.grande {
+  min-width: 150px;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.24em;
+  color: #f6e3b8;
+  border-color: var(--ottone);
+  background: linear-gradient(#8a2432, #5e1520);
+  box-shadow: inset 0 1px 0 rgba(255, 220, 180, 0.22), 0 2px 8px rgba(0, 0, 0, 0.6);
+}
+
+button.grande:hover:not(:disabled) {
+  border-color: var(--ottone-chiaro);
+  background: linear-gradient(#9c2b3a, var(--borgogna));
+}
+
+#vantaggio,
+#svantaggio,
+#pulisci {
+  font-size: 13px;
+  letter-spacing: 0.14em;
+}
+
+#vantaggio,
+#svantaggio {
+  color: var(--ottone-chiaro);
+}
+
+#pulisci {
+  color: var(--tenue);
+  background: none;
+  border-color: var(--bordo);
+  box-shadow: none;
+}
+
+#errore {
+  min-height: 20px;
+  margin-top: 6px;
+  color: var(--rosso);
+  font-size: 14px;
+}
+
+/*
+ * Finestre di ogni misura. Il disegno pieno vuole 1280 punti di larghezza; sotto, le colonne e i
+ * pulsanti dei dadi si stringono; sotto i 900 la pagina diventa una colonna sola, coi dadi in una
+ * fascia sotto il vassoio e la cronaca in un pannello che entra da destra. Il vassoio si adatta da sé:
+ * la scena sceglie la camera che lo mostra più grande.
+ */
+@media (max-width: 1279px) {
+  main {
+    grid-template-columns: 176px minmax(0, 1fr) 280px;
+  }
+
+  #testata {
+    gap: 16px;
+    padding: 8px 16px;
+  }
+
+  #comandi {
+    padding: 10px 16px;
+  }
+
+  .dado {
+    grid-template-columns: minmax(0, 1fr) 18px 22px 22px;
+    gap: 3px;
+  }
+
+  .dado .nome {
+    gap: 6px;
+    padding: 5px 4px;
+  }
+
+  .dado button.meno,
+  .dado button.piu {
+    height: 22px;
+    font-size: 14px;
+  }
+
+  button.grande {
+    min-width: 124px;
+  }
+}
+
+@media (max-width: 1099px) {
+  #testata {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+
+  #richieste {
+    order: 3;
+    flex-basis: 100%;
+    flex-wrap: wrap;
+  }
+
+  /* Il testo della richiesta va a capo dentro di sé: il suo TIRA resta accanto, a destra. */
+  #richieste .chiede {
+    flex: 1 1 200px;
+    min-width: 0;
+  }
+
+  .pulsanti {
+    flex: 1 1 100%;
+  }
+
+  .pulsanti button {
+    flex: 1 1 auto;
+  }
+}
+
+@media (max-width: 899px) {
+  main {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) auto;
+  }
+
+  #vassoio {
+    grid-row: 1;
+  }
+
+  #dadi {
+    grid-row: 2;
+    flex-direction: row;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 4px 12px;
+    padding: 6px 10px;
+    border-right: 0;
+    border-top: 1px solid var(--bordo);
+    box-shadow: none;
+    background: #140f0b;
+  }
+
+  #dadi h2 {
+    display: none;
+  }
+
+  .dado {
+    grid-template-columns: auto 18px 22px 22px;
+  }
+
+  #cronaca {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 4;
+    width: min(340px, 88%);
+    transform: translateX(100%);
+    visibility: hidden;
+    transition: transform 0.18s ease-out, visibility 0s linear 0.18s;
+    box-shadow: -14px 0 28px rgba(0, 0, 0, 0.65);
+  }
+
+  body.cronaca-aperta #cronaca {
+    transform: none;
+    visibility: visible;
+    transition: transform 0.18s ease-out;
+  }
+
+  #apri-cronaca {
+    display: block;
+    margin-left: auto;
+  }
+
+  #stato {
+    margin-left: 0;
+  }
+}
+
+@media (max-width: 599px) {
+  #testata {
+    gap: 12px;
+    padding: 8px 12px;
+  }
+
+  #testata h1 {
+    gap: 10px;
+    font-size: 15px;
+    letter-spacing: 0.2em;
+  }
+
+  #comandi {
+    padding: 8px 12px;
+  }
+
+  .campi,
+  .pulsanti {
+    gap: 8px;
+  }
+
+  #formula {
+    flex-basis: 200px;
+  }
+
+  #etichetta {
+    flex-basis: 120px;
+  }
+
+  button.grande {
+    min-width: 0;
+  }
+
+  #richieste .tira-richiesta {
+    min-width: 0;
+  }
+
+  #vantaggio,
+  #svantaggio,
+  #pulisci {
+    letter-spacing: 0.06em;
+  }
+}
+
+/*
+ * Finestre basse e strette, come 800 per 600: quando il DM chiede un tiro il titolo lascia il posto
+ * all'avviso, e campi e pulsanti stanno su una riga sola dove ci entrano.
+ */
+@media (max-width: 1099px) and (max-height: 560px) {
+  #testata:has(#richieste:not([hidden])) h1 {
+    display: none;
+  }
+
+  #richieste {
+    order: 0;
+    flex-basis: auto;
+  }
+}
+
+@media (min-width: 700px) and (max-width: 1099px) and (max-height: 560px) {
+  #formula {
+    flex-basis: 120px;
+  }
+
+  #etichetta {
+    flex-basis: 80px;
+  }
+
+  .pulsanti {
+    flex: 0 0 auto;
+    margin-left: auto;
+  }
+
+  .pulsanti button {
+    flex: 0 0 auto;
+  }
+}
+
+@media (max-height: 760px) {
+  #testata {
+    min-height: 48px;
+    padding-top: 6px;
+    padding-bottom: 6px;
+  }
+
+  #comandi {
+    padding-top: 8px;
+    padding-bottom: 8px;
+  }
+
+  #errore {
+    min-height: 16px;
+    margin-top: 4px;
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "name": "dice-sanctum",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A 3D dice table with real physics for tabletop role-playing with an AI game master: every roll reaches the DM through a local bridge and an MCP server.",
+  "license": "MIT",
+  "author": "Andrea Inandri",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/andreainandri/dice-sanctum.git"
+  },
+  "keywords": [
+    "dice",
+    "mcp",
+    "claude-code",
+    "ttrpg",
+    "tabletop",
+    "three.js",
+    "rapier"
+  ],
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node src/bridge/avvia.ts",
+    "bridge": "node src/bridge/main.ts",
+    "mcp": "node src/mcp/server.ts",
+    "build": "vite build",
+    "dev": "vite",
+    "test": "node --test --test-concurrency=4 \"test/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit -p .",
+    "fairness": "node strumenti/equita.ts"
+  },
+  "dependencies": {
+    "@dimforge/rapier3d-compat": "0.21.0",
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "three": "0.187.0",
+    "ws": "8.23.0",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "@types/three": "0.187.0",
+    "@types/ws": "8.18.2",
+    "typescript": "7.0.2",
+    "vite": "8.3.8"
+  }
+}
