@@ -1,6 +1,7 @@
 // Le prove d'integrazione del server MCP vero, lanciato come lo lancia Claude Code, col client
-// dell'SDK al posto della sessione del DM: i quattro strumenti, il canale (ogni tiro una volta sola),
-// le attese, gli annullamenti, il ponte spento e riavviato a metà.
+// dell'SDK al posto della sessione del DM: i sei strumenti, il canale (ogni tiro una volta sola),
+// le attese, gli annullamenti, i dadi del master, i tiri fatti al posto di chi gioca, il ponte spento
+// e riavviato a metà.
 
 import assert from 'node:assert/strict';
 import { createServer } from 'node:net';
@@ -44,9 +45,19 @@ describe('il server MCP col ponte spento', () => {
     await mcp.chiudi();
   });
 
-  it('elenca i quattro strumenti, con l’attesa fino a 110 secondi', async () => {
+  it('elenca i sei strumenti, con l’attesa fino a 110 secondi e fino a otto tiri per lancio', async () => {
     const { tools } = await mcp.client.listTools();
-    assert.deepEqual(tools.map((t) => t.name).sort(), ['cancel_player_roll', 'get_rolls', 'get_status', 'request_player_roll']);
+    assert.deepEqual(tools.map((t) => t.name).sort(), ['cancel_player_roll', 'dm_roll', 'get_rolls', 'get_status', 'request_player_roll', 'roll_for_player']);
+    for (const nome of ['dm_roll', 'roll_for_player']) {
+      const lancio = tools.find((t) => t.name === nome)!;
+      assert.deepEqual(lancio.inputSchema.required, ['rolls'], nome);
+      const tiri = (lancio.inputSchema.properties as Record<string, { minItems?: number; maxItems?: number; items?: { required?: string[] } }>).rolls!;
+      assert.equal(tiri.minItems, 1, nome);
+      assert.equal(tiri.maxItems, 8, nome);
+      assert.deepEqual(tiri.items?.required, ['formula', 'label'], nome);
+    }
+    // Chi tira al posto di chi gioca non può tirare di nascosto.
+    assert.deepEqual(Object.keys(tools.find((t) => t.name === 'roll_for_player')!.inputSchema.properties ?? {}), ['rolls']);
     const richiesta = tools.find((t) => t.name === 'request_player_roll')!;
     const proprieta = richiesta.inputSchema.properties as Record<string, { maximum?: number }>;
     assert.equal(proprieta.wait_seconds?.maximum, 110);
@@ -58,6 +69,9 @@ describe('il server MCP col ponte spento', () => {
     assert.match(mcp.client.getInstructions() ?? '', /<channel source="dice-sanctum"/);
     // Senza DICE_SANCTUM_PLAYER il giocatore non ha nome.
     assert.match(mcp.client.getInstructions() ?? '', /^Dice Sanctum: the 3D dice table where the player rolls the dice of their character\./);
+    assert.match(mcp.client.getInstructions() ?? '', /For the DM's own dice \(monsters, companions, hidden checks\) use dm_roll\./);
+    assert.match(mcp.client.getInstructions() ?? '', /When the player cannot be at the table and asks you to roll for them, use roll_for_player:/);
+    assert.match(mcp.client.getInstructions() ?? '', /Use it only on their word .*never on your own initiative/);
   });
 
   it('dice chiaro che il ponte è spento', async () => {
@@ -66,9 +80,15 @@ describe('il server MCP col ponte spento', () => {
     assert.match(s.testo, /^Bridge: off\. The bridge does not answer at http:\/\/127\.0\.0\.1:\d+: the Dice Sanctum is off\./);
     const r = await mcp.chiama('request_player_roll', { formula: '1d20+3', label: 'Salvezza su Costituzione', wait_seconds: 5 });
     assert.equal(r.errore, true);
-    assert.match(r.testo, /the Dice Sanctum is off\. It starts with `npm start` in the dice-sanctum folder\./);
+    assert.match(r.testo, /the Dice Sanctum is off\. It starts with `npm start` in the dice-sanctum folder, or with the table skill of the Dice Sanctum plugin\./);
     assert.equal((await mcp.chiama('get_rolls')).errore, true);
     assert.equal((await mcp.chiama('cancel_player_roll', { requestId: 'r-0001' })).errore, true);
+    const m = await mcp.chiama('dm_roll', { rolls: [{ formula: '1d20+4', label: 'Lupo, morso' }] });
+    assert.equal(m.errore, true);
+    assert.match(m.testo, /the Dice Sanctum is off\./);
+    const perLui = await mcp.chiama('roll_for_player', { rolls: [{ formula: '1d20+5', label: 'Percezione' }] });
+    assert.equal(perLui.errore, true);
+    assert.match(perLui.testo, /the Dice Sanctum is off\./);
   });
 
   it('respinge un’attesa oltre il massimo e una formula sbagliata', async () => {
@@ -81,6 +101,17 @@ describe('il server MCP col ponte spento', () => {
     const storta = await mcp.chiama('request_player_roll', { formula: '1d7', label: 'Prova' });
     assert.equal(storta.errore, true);
     assert.match(storta.testo, /^invalid formula/);
+    const delMaster = await mcp.chiama('dm_roll', { rolls: [{ formula: '1d20', label: 'Buona' }, { formula: '2d7', label: 'Storta' }] });
+    assert.equal(delMaster.errore, true);
+    assert.match(delMaster.testo, /^roll 2: invalid formula/);
+    for (const rolls of [[], Array.from({ length: 9 }, () => ({ formula: '1d6', label: 'x' })), [{ formula: '1d6' }]]) {
+      const r = await mcp.chiama('dm_roll', { rolls }).catch((e: Error) => ({ testo: e.message, errore: true }));
+      assert.equal(r.errore, true, JSON.stringify(rolls));
+      assert.match(r.testo, /rolls/);
+    }
+    const perLui = await mcp.chiama('roll_for_player', { rolls: [{ formula: '1d20', label: 'Buona' }, { formula: '2d7', label: 'Storta' }] });
+    assert.equal(perLui.errore, true);
+    assert.match(perLui.testo, /^roll 2: invalid formula/);
   });
 
   it('esce da solo quando la sessione chiude stdin, anche col feed che si ricollega', async () => {
@@ -311,5 +342,180 @@ describe('il server MCP col ponte acceso', () => {
       .map((e) => e.seq)
       .filter((s) => s !== 1);
     assert.deepEqual([...dalCanale, ...dallaChiamata].sort((a, b) => a - b), tiri);
+  });
+});
+
+describe('il master tira dal server MCP', () => {
+  const dir = cartellaDiProva();
+  let ponte: Ponte;
+  let P: number;
+  let mcp: Mcp;
+  let tavolo: TavoloDiProva;
+
+  const lancio = (t: TavoloDiProva) => t.aspetta<Extract<DalPonte, { tipo: 'lancio del master' }>>((m) => m.tipo === 'lancio del master');
+
+  before(async () => {
+    // Le attese delle riprese durano un ventesimo del vero.
+    ponte = await accendiPonte(dir.registro, dir.client, 0, { ritmoDelleRiprese: 0.05 });
+    P = ponte.porta;
+    mcp = await clientMcp(P, 'Ada');
+  });
+  after(async () => {
+    await tavolo?.chiudi();
+    await mcp.chiudi();
+    await ponte.ferma();
+    dir.via();
+  });
+
+  it('senza tavolo tira lo stesso e dice che nessuno l’ha visto', async () => {
+    const r = await mcp.chiama('dm_roll', { rolls: [{ formula: '1d20+4', label: 'Lupo, morso' }] });
+    assert.equal(r.errore, false);
+    assert.match(r.testo, /^DM throw \(no table connected: nobody saw it land\):\n#1 Lupo, morso 1d20\+4: \[\d+\] \+4 = \d+( · NATURAL (20|1))?$/);
+    assert.equal(ponte.registro.ultimoSeq, 1);
+  });
+
+  it('in chiaro: i tiri di un turno in un lancio solo, sul tavolo, ognuno con la sua riga', async () => {
+    tavolo = await TavoloDiProva.apri(P);
+    const chiamata = mcp.chiama('dm_roll', {
+      rolls: [
+        { formula: '1d20 + 4', label: 'Lupo, morso' },
+        { formula: '2d4+2', label: 'Lupo, danno' },
+      ],
+    });
+    const m = await lancio(tavolo);
+    const r = await chiamata;
+    assert.equal(r.errore, false);
+    const righe = r.testo.split('\n');
+    assert.equal(righe[0], 'DM throw (on the table of Ada):');
+    assert.deepEqual(righe.slice(1), m.tiri.map((t) => `#${t.seq} ${t.summary}${t.nat20 ? ' · NATURAL 20' : t.nat1 ? ' · NATURAL 1' : ''}`));
+    assert.deepEqual(m.tiri.map((t) => [t.seq, t.label, t.formula]), [
+      [2, 'Lupo, morso', '1d20+4'],
+      [3, 'Lupo, danno', '2d4+2'],
+    ]);
+    assert.equal(m.ripresa.dadi.length, 3);
+  });
+
+  it('dietro lo schermo: la risposta ha i numeri, il tavolo una voce coperta', async () => {
+    const r = await mcp.chiama('dm_roll', { rolls: [{ formula: '1d20+6', label: 'Furtività della creatura' }], secret: true });
+    assert.match(r.testo, /^DM throw \(behind the screen\):\n#4 Furtività della creatura 1d20\+6: \[\d+\] \+6 = \d+/);
+    const m = await tavolo.aspetta<Extract<DalPonte, { tipo: 'evento' }>>((x) => x.tipo === 'evento' && x.evento.type === 'dm.roll.hidden');
+    assert.deepEqual(Object.keys(m.evento), ['v', 'seq', 'type', 'id', 'at', 'throwId']);
+    assert.equal(m.evento.seq, 4);
+  });
+
+  it('un tiro del master non chiude una richiesta e non torna dal canale; il tiro del tavolo sì', async () => {
+    const chiesta = await mcp.chiama('request_player_roll', { formula: '1d20+3', label: 'Salvezza su Costituzione' });
+    assert.match(chiesta.testo, /^Request r-0001 /);
+    await richiestaSulTavolo(tavolo, 'Salvezza su Costituzione');
+    await mcp.chiama('dm_roll', { rolls: [{ formula: '1d20+3', label: 'Salvezza su Costituzione' }] });
+    await lancio(tavolo);
+    assert.match((await mcp.chiama('get_status')).testo, /^Open requests \(oldest first\): r-0001 Salvezza su Costituzione, 1d20\+3, asked at \d\d:\d\d:\d\d\.$/m);
+    const seq = seqDi(await tavolo.tira(tiro('1d20+3', [[12]], { requestId: 'r-0001', label: 'Salvezza su Costituzione' })));
+    const n = await mcp.aspettaCanale((x) => x.meta.seq === String(seq));
+    assert.equal(n.meta.request_id, 'r-0001');
+    await dormi(300);
+    // Dal canale è uscito soltanto il tiro del tavolo: i tiri del master tornano nella loro chiamata.
+    assert.deepEqual(mcp.canale.map((x) => Number(x.meta.seq)), [seq]);
+  });
+
+  it('get_rolls li mostra, e dice dove sono caduti', async () => {
+    const tutto = (await mcp.chiama('get_rolls', { since_seq: 0, limit: 100 })).testo;
+    assert.match(tutto, /^#1 \d\d:\d\d:\d\d DM roll, no table connected · Lupo, morso 1d20\+4: /m);
+    assert.match(tutto, /^#2 \d\d:\d\d:\d\d DM roll, on the table · Lupo, morso 1d20\+4: /m);
+    assert.match(tutto, /^#3 \d\d:\d\d:\d\d DM roll, on the table · Lupo, danno 2d4\+2: /m);
+    assert.match(tutto, /^#4 \d\d:\d\d:\d\d DM roll, behind the screen · Furtività della creatura 1d20\+6: /m);
+    assert.match(tutto, /^#5 \d\d:\d\d:\d\d request r-0001 · Salvezza su Costituzione, 1d20\+3$/m);
+  });
+});
+
+describe('il master tira al posto di chi gioca dal server MCP', () => {
+  const dir = cartellaDiProva();
+  let ponte: Ponte;
+  let P: number;
+  let mcp: Mcp;
+  let tavolo: TavoloDiProva;
+
+  const lancio = (t: TavoloDiProva) => t.aspetta<Extract<DalPonte, { tipo: 'lancio per chi gioca' }>>((m) => m.tipo === 'lancio per chi gioca');
+  const coda = '( · NATURAL (20|1))?';
+
+  before(async () => {
+    // Le attese delle riprese durano un ventesimo del vero.
+    ponte = await accendiPonte(dir.registro, dir.client, 0, { ritmoDelleRiprese: 0.05 });
+    P = ponte.porta;
+    mcp = await clientMcp(P, 'Ada');
+  });
+  after(async () => {
+    await tavolo?.chiudi();
+    await mcp.chiudi();
+    await ponte.ferma();
+    dir.via();
+  });
+
+  it('senza tavolo tira lo stesso: il tiro è nel registro e la risposta dice che nessuno l’ha visto', async () => {
+    const r = await mcp.chiama('roll_for_player', { rolls: [{ formula: '1d20+5', label: 'Percezione' }] });
+    assert.equal(r.errore, false);
+    assert.match(
+      r.testo,
+      new RegExp(`^Rolled in place of Ada \\(no table connected: it is in the roll log, nobody saw it land\\):\\n#1 Percezione 1d20\\+5: \\[\\d+\\] \\+5 = \\d+${coda}$`),
+    );
+    assert.equal(ponte.registro.ultimoSeq, 1);
+  });
+
+  it('col tavolo: i tiri di un’azione in un lancio solo, coi dadi di chi gioca, ognuno con la sua riga', async () => {
+    tavolo = await TavoloDiProva.apri(P);
+    const chiamata = mcp.chiama('roll_for_player', {
+      rolls: [
+        { formula: '1d20 + 6', label: 'Spada lunga, attacco' },
+        { formula: '1d8+4', label: 'Spada lunga, danno' },
+      ],
+    });
+    const m = await lancio(tavolo);
+    const r = await chiamata;
+    assert.equal(r.errore, false);
+    const righe = r.testo.split('\n');
+    assert.equal(righe[0], 'Rolled in place of Ada (shown on their table):');
+    assert.deepEqual(righe.slice(1), m.tiri.map((t) => `#${t.seq} ${t.summary}${t.nat20 ? ' · NATURAL 20' : t.nat1 ? ' · NATURAL 1' : ''}`));
+    assert.deepEqual(m.tiri.map((t) => [t.seq, t.type, t.rolledBy, t.label, t.formula]), [
+      [2, 'roll.completed', 'dm', 'Spada lunga, attacco', '1d20+6'],
+      [3, 'roll.completed', 'dm', 'Spada lunga, danno', '1d8+4'],
+    ]);
+    assert.equal(m.ripresa.dadi.length, 2);
+  });
+
+  it('con una richiesta aperta: non la chiude, e la risposta ricorda di annullarla', async () => {
+    const chiesta = await mcp.chiama('request_player_roll', { formula: '1d20+3', label: 'Salvezza su Costituzione' });
+    assert.match(chiesta.testo, /^Request r-0001 /);
+    await richiestaSulTavolo(tavolo, 'Salvezza su Costituzione');
+    const r = await mcp.chiama('roll_for_player', { rolls: [{ formula: '1d20+3', label: 'Salvezza su Costituzione' }] });
+    await lancio(tavolo);
+    assert.match(r.testo, /\nStill open on the table, not fulfilled by this throw: r-0001 \(Salvezza su Costituzione, 1d20\+3\)\. Cancel what this throw replaced\.$/);
+    assert.match((await mcp.chiama('get_status')).testo, /^Open requests \(oldest first\): r-0001 /m);
+    assert.match((await mcp.chiama('cancel_player_roll', { requestId: 'r-0001' })).testo, /^Request r-0001 cancelled/);
+  });
+
+  it('dal canale esce soltanto il tiro che chi gioca fa al tavolo: quelli fatti al suo posto tornano nella chiamata', async () => {
+    const seq = seqDi(await tavolo.tira(tiro('1d20', [[14]], { label: 'Tornato al tavolo' })));
+    await mcp.aspettaCanale((x) => x.meta.seq === String(seq));
+    await dormi(300);
+    assert.deepEqual(mcp.canale.map((x) => Number(x.meta.seq)), [seq]);
+  });
+
+  it('get_rolls li mostra come tiri di chi gioca fatti dal DM', async () => {
+    const tutto = (await mcp.chiama('get_rolls', { since_seq: 0, limit: 100 })).testo;
+    assert.match(tutto, /^#1 \d\d:\d\d:\d\d rolled by the DM for Ada · Percezione 1d20\+5: /m);
+    assert.match(tutto, /^#2 \d\d:\d\d:\d\d rolled by the DM for Ada · Spada lunga, attacco 1d20\+6: /m);
+    assert.match(tutto, /^#3 \d\d:\d\d:\d\d rolled by the DM for Ada · Spada lunga, danno 1d8\+4: /m);
+    assert.match(tutto, /^#\d+ \d\d:\d\d:\d\d free roll · Tornato al tavolo 1d20: /m);
+  });
+
+  it('una sessione del DM aperta dopo non se li vede arrivare dal canale', async () => {
+    const altra = await clientMcp(P, 'Ada');
+    await mcp.chiama('roll_for_player', { rolls: [{ formula: '1d6', label: 'Danno' }] });
+    await lancio(tavolo);
+    const seq = seqDi(await tavolo.tira(tiro('1d20', [[3]], { label: 'Sentinella' })));
+    await altra.aspettaCanale((x) => x.meta.seq === String(seq));
+    await dormi(200);
+    assert.deepEqual(altra.canale.map((x) => Number(x.meta.seq)), [seq]);
+    await altra.chiudi();
   });
 });

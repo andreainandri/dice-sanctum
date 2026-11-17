@@ -12,7 +12,9 @@ import { caricaCaratteri } from './caratteri.ts';
 import { Collegamento } from './collegamento.ts';
 import { Interfaccia, preparaLingua } from './interfaccia.ts';
 import { caricaTrame } from './materiali.ts';
+import { SERIE_DEL_GIOCATORE, type SerieDelGiocatore } from './facce.ts';
 import { Scena } from './scena.ts';
+import { Suono, montaPulsanteDelSuono } from './suono.ts';
 import { type Ascoltatore, Tavolo } from './tavolo.ts';
 
 declare global {
@@ -48,7 +50,18 @@ const vassoio = new Vassoio(R, FISICA);
   for (let k = 0; k < 30 && l.stato === 'in corso'; k++) l.passo();
   vassoio.pulisci();
 }
-const scena = new Scena(document.getElementById('tela')!, FISICA, trame);
+// La serie di dadi di chi gioca resta scelta da una visita all'altra.
+const CHIAVE_SERIE = 'dice-sanctum.serie';
+const serieSalvata = (): SerieDelGiocatore => {
+  try {
+    const s = localStorage.getItem(CHIAVE_SERIE);
+    return SERIE_DEL_GIOCATORE.find((x) => x === s) ?? SERIE_DEL_GIOCATORE[0];
+  } catch {
+    return SERIE_DEL_GIOCATORE[0];
+  }
+};
+const serie = serieSalvata();
+const scena = new Scena(document.getElementById('tela')!, FISICA, trame, serie);
 
 /** Il TIRA dell'avviso: esattamente la formula e l'etichetta della richiesta. */
 const tiraPerIlDm = async (r: RichiestaCreata): Promise<TiroDalTavolo> => {
@@ -66,12 +79,26 @@ const tiraPerIlDm = async (r: RichiestaCreata): Promise<TiroDalTavolo> => {
 };
 
 // Interfaccia, tavolo e collegamento si chiamano a vicenda soltanto dopo l'avvio, quando ci sono tutti.
-const ui = new Interfaccia({
-  lancia: (f, etichetta) => tavolo.tira(f, etichetta),
-  lanciaRichiesta: tiraPerIlDm,
-  pulisci: () => tavolo.pulisci(),
-});
+const ui = new Interfaccia(
+  {
+    lancia: (f, etichetta) => tavolo.tira(f, etichetta),
+    lanciaRichiesta: tiraPerIlDm,
+    pulisci: () => tavolo.pulisci(),
+    scegliSerie: (s) => {
+      scena.scegliSerie(s);
+      try {
+        localStorage.setItem(CHIAVE_SERIE, s);
+      } catch {
+        // Senza localStorage la scelta vale fino alla chiusura della pagina.
+      }
+    },
+  },
+  serie,
+);
+const suono = new Suono();
+montaPulsanteDelSuono(document.getElementById('suono') as HTMLButtonElement, suono);
 const ascolta: Ascoltatore = {
+  urto: (u) => suono.colpo(u),
   inizio: () => ui.inizio(),
   ritiro: (frase) => ui.ritiro(frase),
   fine: (e) => {
@@ -79,9 +106,30 @@ const ascolta: Ascoltatore = {
     collegamento.invia(e);
   },
   fallito: (motivo) => ui.fallito(motivo),
+  inizioDelMaster: (tiri) => ui.inizioDelMaster(tiri),
+  fineDelMaster: (tiri, visto) => ui.fineDelMaster(tiri, visto),
+  inizioPerChiGioca: (tiri) => ui.inizioPerChiGioca(tiri),
+  finePerChiGioca: (tiri, visto) => ui.finePerChiGioca(tiri, visto),
 };
 const tavolo = new Tavolo(vassoio, scena, ascolta);
-const collegamento = new Collegamento(ui);
+const collegamento = new Collegamento({
+  stato: (collegato, inCoda) => ui.stato(collegato, inCoda),
+  richieste: (r) => ui.richieste(r),
+  cronaca: (registrati, inCoda) => ui.cronaca(registrati, inCoda),
+  registrato: (t) => ui.registrato(t),
+  inRegistro: (id) => ui.inRegistro(id),
+  respinto: (t, motivo) => ui.respinto(t, motivo),
+  diventatoLibero: (t, requestId, problema) => ui.diventatoLibero(t, requestId, problema),
+  // Con la ripresa i dadi del master rotolano sul vassoio; senza, i tiri vanno dritti in cronaca.
+  lancioDelMaster: (tiri, ripresa) => (ripresa ? tavolo.riproduci(tiri, ripresa) : ui.fineDelMaster(tiri, false)),
+  // Il master ha tirato al posto di chi gioca: gli stessi dadi di chi gioca, e il totale dove vanno i suoi.
+  lancioPerChiGioca: (tiri, ripresa) => tavolo.riproduciPerChiGioca(tiri, ripresa),
+  // Dietro lo schermo i dadi non si vedono: si sentono, attutiti.
+  dietroLoSchermo: (t) => {
+    suono.dietroLoSchermo();
+    ui.dietroLoSchermo(t);
+  },
+});
 document.getElementById('caricamento')?.remove();
 
 window.__sanctum = {

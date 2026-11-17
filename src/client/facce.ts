@@ -1,4 +1,6 @@
-// Le mesh dei dadi e le loro facce dipinte: il set Obsidian & Gold, corpo nero lucido e numeri d'oro incisi.
+// Le mesh dei dadi e le loro facce dipinte, in tre serie. Due sono di chi gioca, da scegliere: Perla azzurra
+// (resina azzurra a nuvole, numeri d'argento) e Ossidiana e oro (corpo nero lucido, numeri d'oro incisi).
+// La terza è del master: sangue di bue marmorizzato coi numeri d'oro, che a colpo d'occhio non si confonde.
 // La mesh nasce dagli stessi vertici del collisore e del lettore; gli spigoli smussati sono soltanto disegno
 // e stanno dentro il guscio, con ogni faccia sul piano della faccia del collisore: un dado posato tocca il
 // fondo dove lo tocca la fisica. I numeri si dipingono su tele (una cella per faccia) dalla stessa tabella
@@ -11,6 +13,12 @@ import { type V3, diff, lunghezza, normalizza, punto, scala, somma, vettoriale }
 
 export const TONI = ['normale', 'scartato', 'oro', 'rosso'] as const;
 export type Tono = (typeof TONI)[number];
+/** Le serie fra cui sceglie chi gioca al tavolo; la prima è quella di partenza. */
+export const SERIE_DEL_GIOCATORE = ['perla', 'ossidiana'] as const;
+export type SerieDelGiocatore = (typeof SERIE_DEL_GIOCATORE)[number];
+/** Tutte le serie: quelle di chi gioca e quella del master. */
+export const SERIE = [...SERIE_DEL_GIOCATORE, 'master'] as const;
+export type Serie = (typeof SERIE)[number];
 
 const CELLA = 256;
 const MARGINE = 8;
@@ -21,31 +29,107 @@ const SCALA_DATI = 0.5;
  * numeri incisi), verde la ruvidezza, blu il metallo.
  */
 interface Aspetto {
+  /** Il colore del corpo; se la resina ha le vene, è quello degli spigoli. */
   corpo: string;
   numeri: string;
   datiCorpo: string;
   datiNumeri: string;
+  /** Le vene della resina, quando il corpo non è di un colore solo. */
+  vene?: Vene;
+  /** Un filo scuro intorno alle cifre, dove il corpo chiaro le confonderebbe. */
+  contorno?: string;
 }
 
+/**
+ * Una resina a due colori che si mescolano a nuvole (`scuro` e `chiaro`), con una vena sottile di un terzo
+ * colore dove le nuvole si incontrano: `forza` dice quanto la vena copre, `fitte` quante nuvole stanno in un
+ * centimetro.
+ */
+interface Vene {
+  scuro: string;
+  chiaro: string;
+  vena: string;
+  forza: number;
+  fitte: number;
+}
+
+/** Perla azzurra: resina azzurra a nuvole con striature di perla, numeri d'argento. */
+const PERLA: Aspetto = {
+  corpo: '#3a82c2',
+  numeri: '#eef2f6',
+  datiCorpo: 'rgb(255, 52, 56)',
+  datiNumeri: 'rgb(70, 84, 140)',
+  contorno: '#123961',
+  vene: { scuro: '#2a6aab', chiaro: '#4b96d6', vena: '#bfe0f7', forza: 0.5, fitte: 0.85 },
+};
+/** Il d10 delle decine della perla: blu notte, più scuro del compagno del d100. */
+const NOTTE: Aspetto = {
+  corpo: '#142c4e',
+  numeri: '#eef2f6',
+  datiCorpo: 'rgb(255, 52, 56)',
+  datiNumeri: 'rgb(70, 84, 140)',
+  vene: { scuro: '#0a1830', chiaro: '#234a7c', vena: '#7fb2e0', forza: 0.5, fitte: 0.85 },
+};
 /** Ossidiana: resina nera lucida, numeri d'oro. */
 const OSSIDIANA: Aspetto = { corpo: '#0d0c0f', numeri: '#caa252', datiCorpo: 'rgb(255, 38, 0)', datiNumeri: 'rgb(70, 90, 255)' };
 /** Bronzo brunito coi numeri neri: il d10 delle decine si distingue dal compagno del d100 su qualunque fondo. */
 const BRONZO: Aspetto = { corpo: '#7a5a38', numeri: '#121014', datiCorpo: 'rgb(255, 105, 140)', datiNumeri: 'rgb(70, 115, 0)' };
-const ASPETTI: Record<Ruolo, Aspetto> = { semplice: OSSIDIANA, unita: OSSIDIANA, decine: BRONZO };
+/** I dadi del master: sangue di bue marmorizzato, con le vene quasi nere e i numeri d'oro. */
+const SANGUE: Aspetto = {
+  corpo: '#5c0f17',
+  numeri: '#efcf80',
+  datiCorpo: 'rgb(255, 38, 0)',
+  datiNumeri: 'rgb(70, 90, 255)',
+  vene: { scuro: '#35060b', chiaro: '#8a1722', vena: '#120204', forza: 0.85, fitte: 0.9 },
+};
+/** Il d10 delle decine del master, più scuro del compagno e coi numeri color osso. */
+const SANGUE_SCURO: Aspetto = {
+  corpo: '#34080e',
+  numeri: '#e6dcc6',
+  datiCorpo: 'rgb(255, 38, 0)',
+  datiNumeri: 'rgb(70, 115, 0)',
+  vene: { scuro: '#1b0306', chiaro: '#4d0e16', vena: '#8f2a30', forza: 0.4, fitte: 0.9 },
+};
+const ASPETTI: Record<Serie, Record<Ruolo, Aspetto>> = {
+  perla: { semplice: PERLA, unita: PERLA, decine: NOTTE },
+  ossidiana: { semplice: OSSIDIANA, unita: OSSIDIANA, decine: BRONZO },
+  master: { semplice: SANGUE, unita: SANGUE, decine: SANGUE_SCURO },
+};
+/** Le vene si dipingono su una tela piccola per faccia, di tanti pixel di lato: sono larghe, e ingrandite restano lisce. */
+const TELA_VENE = 64;
 /** Altezza delle cifre rispetto al raggio inscritto della faccia smussata. */
-const CIFRE: Record<Forma, number> = { d4: 0.66, d6: 0.95, d8: 0.92, d10: 1.15, d12: 0.88, d20: 0.98 };
+const CIFRE: Record<Forma, number> = { d4: 0.74, d6: 1.2, d8: 1.08, d10: 1.25, d12: 1.05, d20: 1.12 };
+/** Il tratto che ingrossa le cifre, in frazione del corpo del carattere: si leggono meglio da lontano. */
+const TRATTO = 0.035;
+/** Il filo scuro intorno alle cifre, dove c'è, nella stessa misura. */
+const CONTORNO = 0.12;
 /** Lo smusso degli spigoli, in frazione dello spigolo più corto del dado. */
 const SMUSSO = 0.05;
 export const CARATTERE_DADI = '"Sanctum Serif", "Noto Serif", "DejaVu Serif", serif';
 
-interface Disegno {
+/** Quello che di un dado dipende soltanto dalla forma: la mesh e come le facce stanno sulla tela. */
+interface Impianto {
   geometria: THREE.BufferGeometry;
+  larghezza: number;
+  altezza: number;
+  /** Destra e alto di ogni faccia, e i suoi vertici nel suo piano. */
+  piani: { punti: [number, number][]; destra: V3; alto: V3 }[];
+  /** Pixel per centimetro. */
+  k: number;
+  /** Il raggio inscritto della faccia più stretta, in pixel, tolto lo smusso. */
+  raggio: number;
+  /** Il centro della cella della faccia i, in pixel. */
+  cella(i: number): [number, number];
+}
+
+interface Disegno {
   colore: THREE.CanvasTexture;
   dati: THREE.CanvasTexture;
   luce: THREE.CanvasTexture;
   materiali: Map<Tono, THREE.MeshPhysicalMaterial>;
 }
 
+const impianti = new Map<Forma, Impianto>();
 const disegni = new Map<string, Disegno>();
 let anisotropia = 1;
 
@@ -54,12 +138,13 @@ export function impostaAnisotropia(n: number): void {
   anisotropia = n;
 }
 
-export function geometriaDado(forma: Forma, ruolo: Ruolo): THREE.BufferGeometry {
-  return disegno(forma, ruolo).geometria;
+/** La mesh di un dado: la stessa per tutte le serie, che dipingono le stesse celle. */
+export function geometriaDado(forma: Forma): THREE.BufferGeometry {
+  return impianto(forma).geometria;
 }
 
-export function materialeDado(forma: Forma, ruolo: Ruolo, tono: Tono): THREE.MeshPhysicalMaterial {
-  const d = disegno(forma, ruolo);
+export function materialeDado(forma: Forma, ruolo: Ruolo, tono: Tono, serie: Serie): THREE.MeshPhysicalMaterial {
+  const d = disegno(forma, ruolo, serie);
   let m = d.materiali.get(tono);
   if (!m) {
     m = new THREE.MeshPhysicalMaterial({
@@ -227,19 +312,21 @@ function poliedroSmussato(forma: Forma, smusso: number, uvFaccia: (i: number, p:
 interface Pennello {
   fondo: string;
   numeri: string;
+  contorno?: string;
+  /** Le vene del corpo e il seme da cui escono. */
+  vene?: Vene;
+  seme?: number;
 }
 
-function disegno(forma: Forma, ruolo: Ruolo): Disegno {
-  const chiave = `${forma}:${ruolo}`;
-  let d = disegni.get(chiave);
-  if (d) return d;
+function impianto(forma: Forma): Impianto {
+  let im = impianti.get(forma);
+  if (im) return im;
   const g = geometria(forma);
   const n = g.facce.length;
   const colonne = Math.ceil(Math.sqrt(n));
   const righe = Math.ceil(n / colonne);
   const larghezza = colonne * CELLA;
   const altezza = righe * CELLA;
-
   const piani = g.facce.map((_, i) => pianoFaccia(forma, i));
   // Una scala sola per tutte le facce, così i numeri hanno la stessa misura.
   const estensione = Math.max(...piani.flatMap((p) => p.punti.flatMap(([x, y]) => [Math.abs(x), Math.abs(y)])));
@@ -247,6 +334,110 @@ function disegno(forma: Forma, ruolo: Ruolo): Disegno {
   const smusso = SMUSSO * spigoloMinimo(forma);
   const raggio = (Math.min(...piani.map((p) => raggioInscritto(p.punti))) - smusso) * k;
   const cella = (i: number): [number, number] => [(i % colonne) * CELLA + CELLA / 2, Math.floor(i / colonne) * CELLA + CELLA / 2];
+  const uvFaccia = (i: number, p: V3): UV => {
+    const [cx, cy] = cella(i);
+    const { destra, alto } = piani[i]!;
+    const dd = diff(p, g.centri[i]!);
+    const px = cx + punto(dd, destra) * k;
+    const py = cy - punto(dd, alto) * k;
+    return [px / larghezza, 1 - py / altezza];
+  };
+  // Un pixel del margine della prima cella: lì c'è soltanto il corpo, in tutte le tele.
+  const uvCorpo: UV = [3 / larghezza, 1 - 3 / altezza];
+  im = { geometria: poliedroSmussato(forma, smusso, uvFaccia, uvCorpo), larghezza, altezza, piani, k, raggio, cella };
+  impianti.set(forma, im);
+  return im;
+}
+
+/** Rumore a valori su un reticolo, liscio, fra 0 e 1: lo stesso seme dà le stesse nuvole. */
+function rumore(seme: number): (x: number, y: number, z: number) => number {
+  const caso = (x: number, y: number, z: number) => {
+    let n = (Math.imul(x, 0x27d4eb2d) ^ Math.imul(y, 0x165667b1) ^ Math.imul(z, 0x9e3779b1) ^ seme) | 0;
+    n = Math.imul(n ^ (n >>> 15), 0x2c1b3c6d);
+    n = Math.imul(n ^ (n >>> 12), 0x297a2d39);
+    return ((n ^ (n >>> 15)) >>> 0) / 4294967296;
+  };
+  const liscia = (v: number) => v * v * (3 - 2 * v);
+  const fra = (a: number, b: number, v: number) => a + (b - a) * v;
+  return (x, y, z) => {
+    const xi = Math.floor(x);
+    const yi = Math.floor(y);
+    const zi = Math.floor(z);
+    const u = liscia(x - xi);
+    const v = liscia(y - yi);
+    const w = liscia(z - zi);
+    return fra(
+      fra(fra(caso(xi, yi, zi), caso(xi + 1, yi, zi), u), fra(caso(xi, yi + 1, zi), caso(xi + 1, yi + 1, zi), u), v),
+      fra(fra(caso(xi, yi, zi + 1), caso(xi + 1, yi, zi + 1), u), fra(caso(xi, yi + 1, zi + 1), caso(xi + 1, yi + 1, zi + 1), u), v),
+      w,
+    );
+  };
+}
+
+const terna = (esadecimale: string): [number, number, number] => {
+  const n = parseInt(esadecimale.slice(1), 16);
+  return [n >> 16, (n >> 8) & 255, n & 255];
+};
+
+/**
+ * Le vene della resina su tutte le celle. Ogni pixel prende il colore del punto del dado che gli sta sotto,
+ * da un rumore nello spazio: le nuvole passano da una faccia all'altra senza interrompersi, come in un
+ * dado colato davvero.
+ */
+function dipingiVene(ctx: CanvasRenderingContext2D, forma: Forma, im: Impianto, vene: Vene, seme: number): void {
+  const g = geometria(forma);
+  const base = rumore(seme);
+  const nuvola = (x: number, y: number, z: number) => (base(x, y, z) + 0.5 * base(2 * x + 11.3, 2 * y + 4.7, 2 * z + 8.1) + 0.25 * base(4 * x + 3.1, 4 * y + 17.9, 4 * z + 6.4)) / 1.75;
+  const gradino = (v: number) => {
+    const c = Math.min(1, Math.max(0, v));
+    return c * c * (3 - 2 * c);
+  };
+  const scuro = terna(vene.scuro);
+  const chiaro = terna(vene.chiaro);
+  const vena = terna(vene.vena);
+  const piccola = document.createElement('canvas');
+  piccola.width = TELA_VENE;
+  piccola.height = TELA_VENE;
+  const pc = piccola.getContext('2d');
+  if (!pc) throw new Error('canvas 2D non disponibile');
+  const immagine = pc.createImageData(TELA_VENE, TELA_VENE);
+  const passo = CELLA / TELA_VENE / im.k;
+  for (let i = 0; i < im.piani.length; i++) {
+    const { destra, alto } = im.piani[i]!;
+    const c = g.centri[i]!;
+    for (let py = 0; py < TELA_VENE; py++) {
+      const su = (TELA_VENE / 2 - py - 0.5) * passo;
+      for (let px = 0; px < TELA_VENE; px++) {
+        const a = (px + 0.5 - TELA_VENE / 2) * passo;
+        const x = (c[0] + destra[0] * a + alto[0] * su) * vene.fitte;
+        const y = (c[1] + destra[1] * a + alto[1] * su) * vene.fitte;
+        const z = (c[2] + destra[2] * a + alto[2] * su) * vene.fitte;
+        // Le nuvole si piegano l'una sull'altra: il punto si sposta di quanto dice un secondo rumore.
+        const t = nuvola(x + 2.4 * nuvola(x + 5.2, y + 1.3, z + 7.1), y + 2.4 * nuvola(x + 1.7, y + 9.2, z + 3.3), z + 2.4 * nuvola(x + 8.3, y + 2.8, z + 4.9));
+        const quanto = gradino((t - 0.32) / 0.36);
+        // La vena corre dove i due colori si incontrano.
+        const filo = vene.forza * gradino((1 - Math.abs(2 * quanto - 1) - 0.72) / 0.26);
+        const o = (py * TELA_VENE + px) * 4;
+        for (let k = 0; k < 3; k++) {
+          const fondo = scuro[k]! + (chiaro[k]! - scuro[k]!) * quanto;
+          immagine.data[o + k] = fondo + (vena[k]! - fondo) * filo;
+        }
+        immagine.data[o + 3] = 255;
+      }
+    }
+    pc.putImageData(immagine, 0, 0);
+    const [cx, cy] = im.cella(i);
+    ctx.drawImage(piccola, cx - CELLA / 2, cy - CELLA / 2, CELLA, CELLA);
+  }
+}
+
+function disegno(forma: Forma, ruolo: Ruolo, serie: Serie): Disegno {
+  const chiave = `${forma}:${ruolo}:${serie}`;
+  let d = disegni.get(chiave);
+  if (d) return d;
+  const g = geometria(forma);
+  const im = impianto(forma);
+  const { larghezza, altezza, piani, k, raggio, cella } = im;
 
   /** Sfondo e numeri di tutte le facce, con i colori del pennello, alla scala data. */
   const dipingi = (scalaTela: number, pennello: Pennello): HTMLCanvasElement => {
@@ -258,42 +449,39 @@ function disegno(forma: Forma, ruolo: Ruolo): Disegno {
     ctx.scale(scalaTela, scalaTela);
     ctx.fillStyle = pennello.fondo;
     ctx.fillRect(0, 0, larghezza, altezza);
-    for (let i = 0; i < n; i++) {
+    if (pennello.vene) {
+      dipingiVene(ctx, forma, im, pennello.vene, pennello.seme ?? 0);
+      // L'angolo da cui gli spigoli prendono il colore resta del colore del corpo.
+      ctx.fillRect(0, 0, MARGINE - 1, MARGINE - 1);
+    }
+    for (let i = 0; i < piani.length; i++) {
       const [cx, cy] = cella(i);
       const { punti } = piani[i]!;
       if (g.letturaInBasso) {
         // d4: tre numeri per faccia, uno per vertice, con la cima verso il vertice.
         g.facce[i]!.forEach((vi, j) => {
           const [x, y] = punti[j]!;
-          scrivi(ctx, String(g.valoriVertici![vi]), cx + x * k * 0.54, cy - y * k * 0.54, Math.atan2(x, y), raggio * CIFRE[forma], raggio * 1.1, pennello.numeri);
+          scrivi(ctx, String(g.valoriVertici![vi]), cx + x * k * 0.54, cy - y * k * 0.54, Math.atan2(x, y), raggio * CIFRE[forma], raggio * 1.1, pennello.numeri, pennello.contorno);
         });
       } else {
-        scrivi(ctx, etichetta(forma, ruolo, g.letture[i]!), cx, cy, 0, raggio * CIFRE[forma], raggio * 1.7, pennello.numeri);
+        scrivi(ctx, etichetta(forma, ruolo, g.letture[i]!), cx, cy, 0, raggio * CIFRE[forma], raggio * 1.7, pennello.numeri, pennello.contorno);
       }
     }
     return tela;
   };
 
-  const uvFaccia = (i: number, p: V3): UV => {
-    const [cx, cy] = cella(i);
-    const { destra, alto } = piani[i]!;
-    const dd = diff(p, g.centri[i]!);
-    const px = cx + punto(dd, destra) * k;
-    const py = cy - punto(dd, alto) * k;
-    return [px / larghezza, 1 - py / altezza];
-  };
-  // Un pixel del margine della prima cella: lì c'è soltanto il corpo, in tutte le tele.
-  const uvCorpo: UV = [3 / larghezza, 1 - 3 / altezza];
-
-  const aspetto = ASPETTI[ruolo];
-  const colore = new THREE.CanvasTexture(dipingi(1, { fondo: aspetto.corpo, numeri: aspetto.numeri }));
+  const aspetto = ASPETTI[serie][ruolo];
+  // Il seme delle vene viene dal nome del dado: ogni tipo ha le sue, sempre quelle.
+  let seme = 2166136261;
+  for (const c of chiave) seme = Math.imul(seme ^ c.charCodeAt(0), 16777619);
+  const colore = new THREE.CanvasTexture(dipingi(1, { fondo: aspetto.corpo, numeri: aspetto.numeri, contorno: aspetto.contorno, vene: aspetto.vene, seme }));
   colore.colorSpace = THREE.SRGBColorSpace;
   const dati = new THREE.CanvasTexture(dipingi(SCALA_DATI, { fondo: aspetto.datiCorpo, numeri: aspetto.datiNumeri }));
   const luce = new THREE.CanvasTexture(dipingi(SCALA_DATI, { fondo: '#000000', numeri: '#ffffff' }));
   luce.colorSpace = THREE.SRGBColorSpace;
-  for (const t of [colore, dati, luce]) t.anisotropy = anisotropia;
+  for (const tx of [colore, dati, luce]) tx.anisotropy = anisotropia;
 
-  d = { geometria: poliedroSmussato(forma, smusso, uvFaccia, uvCorpo), colore, dati, luce, materiali: new Map() };
+  d = { colore, dati, luce, materiali: new Map() };
   disegni.set(chiave, d);
   return d;
 }
@@ -311,13 +499,16 @@ function scrivi(
   altezza: number,
   larghezzaMassima: number,
   colore: string,
+  contorno?: string,
 ): void {
   // Le cifre sono alte circa 0,71 em: da lì la misura del carattere.
   let corpo = altezza / 0.71;
   ctx.font = `700 ${corpo}px ${CARATTERE_DADI}`;
   let m = ctx.measureText(testo);
-  if (m.width > larghezzaMassima) {
-    corpo *= larghezzaMassima / m.width;
+  // Il tratto allarga la scritta di quanto è spesso.
+  const larga = m.width + corpo * TRATTO;
+  if (larga > larghezzaMassima) {
+    corpo *= larghezzaMassima / larga;
     ctx.font = `700 ${corpo}px ${CARATTERE_DADI}`;
     m = ctx.measureText(testo);
   }
@@ -327,14 +518,26 @@ function scrivi(
   ctx.translate(x, y);
   ctx.rotate(angolo);
   ctx.fillStyle = colore;
+  ctx.strokeStyle = colore;
+  ctx.lineWidth = corpo * TRATTO;
+  ctx.lineJoin = 'round';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'alphabetic';
   // Centro verticale sull'altezza misurata delle cifre (la riga del carattere ha spazio sopra e sotto).
-  ctx.fillText(testo, 0, (su - giu) / 2);
-  if (vaSottolineata(testo)) {
-    const spessore = Math.max(2, corpo * 0.07);
-    const larga = m.width * 0.75;
-    ctx.fillRect(-larga / 2, (su + giu) / 2 + corpo * 0.08, larga, spessore);
+  const base = (su - giu) / 2;
+  const spessore = Math.max(2, corpo * 0.09);
+  const riga = m.width * 0.75;
+  const sotto = (su + giu) / 2 + corpo * 0.08;
+  if (contorno) {
+    ctx.strokeStyle = contorno;
+    ctx.lineWidth = corpo * CONTORNO;
+    ctx.strokeText(testo, 0, base);
+    if (vaSottolineata(testo)) ctx.strokeRect(-riga / 2, sotto, riga, spessore);
+    ctx.strokeStyle = colore;
+    ctx.lineWidth = corpo * TRATTO;
   }
+  ctx.fillText(testo, 0, base);
+  ctx.strokeText(testo, 0, base);
+  if (vaSottolineata(testo)) ctx.fillRect(-riga / 2, sotto, riga, spessore);
   ctx.restore();
 }

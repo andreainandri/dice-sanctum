@@ -2,7 +2,15 @@
 // (anche in localStorage, per una pagina chiusa o ricaricata) finché il ponte non li ha nel registro;
 // a ogni riconnessione la coda riparte, e il ponte scarta i doppioni per id.
 
-import { type RichiestaCreata, type TiroCompletato, type TiroDalTavolo } from '../shared/eventi.ts';
+import { type Ripresa } from '../physics/ripresa.ts';
+import {
+  type RichiestaCreata,
+  type TiroCompletato,
+  type TiroCoperto,
+  type TiroDalTavolo,
+  type TiroDelMaster,
+  type VoceDiCronaca,
+} from '../shared/eventi.ts';
 import { type DalPonte, type DalTavolo, type ProblemaRichiesta } from '../shared/protocollo.ts';
 
 const CHIAVE_CODA = 'dice-sanctum.coda';
@@ -14,13 +22,19 @@ export interface Osservatore {
   /** Le richieste del DM ancora da tirare, la più vecchia per prima. */
   richieste(r: readonly RichiestaCreata[]): void;
   /** La cronaca dal registro, dal più vecchio al più nuovo, più i tiri ancora in coda. */
-  cronaca(registrati: readonly TiroCompletato[], inCoda: readonly TiroDalTavolo[]): void;
+  cronaca(registrati: readonly VoceDiCronaca[], inCoda: readonly TiroDalTavolo[]): void;
   /** Un tiro appena entrato nel registro, da questo tavolo o da un altro. */
   registrato(t: TiroCompletato): void;
   /** Il tiro con questo id è nel registro (anche se c'era già). */
   inRegistro(id: string): void;
   /** Un tiro che il ponte non registra, col perché. */
   respinto(t: TiroDalTavolo, motivo: string): void;
+  /** Un lancio in chiaro del master, già nel registro, con la ripresa da mostrare (o senza, se non c'è). */
+  lancioDelMaster(tiri: readonly TiroDelMaster[], ripresa: Ripresa | null): void;
+  /** Un lancio che il master ha fatto al posto di chi gioca, già nel registro, con la ripresa da mostrare. */
+  lancioPerChiGioca(tiri: readonly TiroCompletato[], ripresa: Ripresa): void;
+  /** Il master ha tirato dietro lo schermo. */
+  dietroLoSchermo(t: TiroCoperto): void;
   /** Un tiro chiesto dal DM che resta come tiro libero: la richiesta `requestId` non c'era più, per `problema`. */
   diventatoLibero(t: TiroDalTavolo, requestId: string, problema: ProblemaRichiesta): void;
 }
@@ -138,11 +152,23 @@ export class Collegamento {
           if (!this.aperte.some((r) => r.requestId === e.requestId)) this.aperte.push(e);
         } else if (e.type === 'request.cancelled') {
           this.aperte = this.aperte.filter((r) => r.requestId !== e.requestId);
+        } else if (e.type === 'dm.roll.hidden') {
+          this.osserva.dietroLoSchermo(e);
+        } else if (e.type === 'dm.roll.completed') {
+          this.osserva.lancioDelMaster([e], null);
         } else {
           if (e.requestId) this.aperte = this.aperte.filter((r) => r.requestId !== e.requestId);
           this.osserva.registrato(e);
         }
         this.aggiornaRichieste();
+        break;
+      }
+      case 'lancio del master': {
+        if (Array.isArray(m.tiri) && m.tiri.length > 0) this.osserva.lancioDelMaster(m.tiri, m.ripresa);
+        break;
+      }
+      case 'lancio per chi gioca': {
+        if (Array.isArray(m.tiri) && m.tiri.length > 0) this.osserva.lancioPerChiGioca(m.tiri, m.ripresa);
         break;
       }
       case 'ricevuto': {

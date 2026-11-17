@@ -72,7 +72,7 @@ describe('fisica', () => {
         const d = v.dadi[0]!;
         assert.ok(v.dentro(d));
         assert.ok(let0!.inclinazione <= FISICA.tolleranzaStorto);
-        assert.equal(let0!.lettura, leggi(geometria(spec.forma), d.corpo.rotation()).lettura);
+        assert.equal(let0!.lettura, leggi(geometria(spec.forma), v.orientamento(d)).lettura);
       }
     }
   });
@@ -122,13 +122,13 @@ describe('fisica', () => {
     assert.equal(l.letture![0]!.ritiri, 0);
   });
 
-  it('al terzo ritiro dello stesso dado il tiro fallisce, con un messaggio chiaro', () => {
+  it('al ritiro di troppo dello stesso dado il tiro fallisce, con un messaggio chiaro', () => {
     const v = nuovoVassoio();
     const l = v.lancia([{ forma: 'd20', ruolo: 'semplice' }, { forma: 'd4', ruolo: 'semplice' }], fonteDaSeme(15), {
       controlloStorto: (i) => i === 0,
     });
     assert.equal(l.finoAllaFine(), 'fallito');
-    assert.equal(l.motivo, 'the d20 came to rest tilted for the third time: roll cancelled, roll again');
+    assert.equal(l.motivo, 'the d20 came to rest tilted for the fourth time: roll cancelled, roll again');
     // La stessa scena con la pagina in italiano.
     impostaLingua('it');
     try {
@@ -136,11 +136,11 @@ describe('fisica', () => {
         controlloStorto: (i) => i === 0,
       });
       assert.equal(it.finoAllaFine(), 'fallito');
-      assert.equal(it.motivo, 'il d20 si è fermato storto per la terza volta: tiro annullato, rilancia');
+      assert.equal(it.motivo, 'il d20 si è fermato storto per la quarta volta: tiro annullato, rilancia');
     } finally {
       impostaLingua('en');
     }
-    assert.equal(l.registroRitiri.filter((r) => r.indice === 0).length, 2);
+    assert.equal(l.registroRitiri.filter((r) => r.indice === 0).length, FISICA.ritiriMassimi);
     assert.equal(l.letture, null);
   });
 
@@ -192,7 +192,7 @@ describe('fisica', () => {
     assert.deepEqual(a, b);
   });
 
-  it('durata: un dado solo fra 0,5 e 1,5 secondi, trenta dadi fra 1 e 3', () => {
+  it('durata: un dado solo fra 1 e 2 secondi, trenta dadi fra 2 e 4,5', () => {
     const v = nuovoVassoio();
     const fonte = fonteDaSeme(18);
     const mediana = (testo: string, n: number) => {
@@ -208,9 +208,9 @@ describe('fisica', () => {
     };
     for (const testo of ['1d20', '1d6', '1d4', '1d12', '1d100', '2d20kh1', '4d6']) {
       const m = mediana(testo, 15);
-      assert.ok(m >= 0.5 && m <= 1.5, `${testo}: mediana ${m.toFixed(2)} s`);
+      assert.ok(m >= 1 && m <= 2, `${testo}: mediana ${m.toFixed(2)} s`);
     }
     const m30 = mediana('10d6+5d8+5d20+5d100', 7);
-    assert.ok(m30 >= 1 && m30 <= 3, `trenta dadi: mediana ${m30.toFixed(2)} s`);
+    assert.ok(m30 >= 2 && m30 <= 4.5, `trenta dadi: mediana ${m30.toFixed(2)} s`);
   });
 });

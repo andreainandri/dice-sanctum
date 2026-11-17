@@ -3,9 +3,11 @@
 // Nell'indirizzo: formula=..., etichetta=..., seme=N (il primo da provare), naturale=20|1 (il tiro deve averlo),
 // richiesta=0 (senza avviso del DM), lampo=MS (col 20 naturale, la scena è pronta MS millisecondi dopo l'inizio del lampo),
 // sponda=vicina (un dado fermo contro la sponda dalla parte della camera, quella che può nasconderlo).
+// Per la torre: scivoli=N (quanti scivoli, al posto di quelli della configurazione), tempo=S (i dadi come stanno S secondi
+// dopo il lancio, al posto di quelli fermi). Per i dadi: serie=perla|ossidiana (quella di chi gioca), master=1 (i dadi del master).
 
 import { fonteDaSeme } from '../physics/casuale.ts';
-import { FISICA } from '../physics/config.ts';
+import { type ConfigFisica, FISICA as DI_SERIE } from '../physics/config.ts';
 import { lettiDaLetture, specsDaFormula } from '../physics/tiro.ts';
 import { Vassoio, caricaRapier } from '../physics/vassoio.ts';
 import { type Conto, calcola } from '../shared/conto.ts';
@@ -13,7 +15,7 @@ import { type RichiestaCreata, type TiroCompletato, numera, tiroDalTavolo } from
 import { tr } from '../shared/lingua.ts';
 import { type Formula, leggiFormula } from '../shared/notazione.ts';
 import { caricaCaratteri } from './caratteri.ts';
-import { type Tono } from './facce.ts';
+import { SERIE_DEL_GIOCATORE, type SerieDelGiocatore, type Tono } from './facce.ts';
 import { Interfaccia, preparaLingua } from './interfaccia.ts';
 import { caricaTrame } from './materiali.ts';
 import { Scena } from './scena.ts';
@@ -25,6 +27,17 @@ declare global {
 }
 
 const q = new URLSearchParams(location.search);
+const scivoli = q.get('scivoli');
+const FISICA: ConfigFisica =
+  scivoli === null
+    ? DI_SERIE
+    : {
+        ...DI_SERIE,
+        torre: {
+          ...DI_SERIE.torre,
+          scivoli: Array.from({ length: Number(scivoli) }, (_, i) => ({ da: i % 2 === 0 ? ('corte' as const) : ('fondo' as const), sporge: 4.4, scende: 2.4 })),
+        },
+      };
 preparaLingua();
 const [R, , trame] = await Promise.all([caricaRapier(), caricaCaratteri(), caricaTrame()]);
 const vassoio = new Vassoio(R, FISICA);
@@ -51,7 +64,8 @@ function lancioFermo(formula: Formula, primo: number, vale: (c: Conto, pose: Pos
   throw new Error(`nessun seme dà il tiro voluto per ${formula.testo}`);
 }
 
-const ui = new Interfaccia({ lancia: () => Promise.resolve(), lanciaRichiesta: () => Promise.resolve(), pulisci: () => {} });
+const serie = SERIE_DEL_GIOCATORE.find((s) => s === q.get('serie')) ?? ('perla' satisfies SerieDelGiocatore);
+const ui = new Interfaccia({ lancia: () => Promise.resolve(), lanciaRichiesta: () => Promise.resolve(), pulisci: () => {}, scegliSerie: (s) => scena.scegliSerie(s) }, serie);
 ui.stato(true, 0);
 
 // La cronaca di una sera di gioco, dal più vecchio al più nuovo.
@@ -76,7 +90,7 @@ if (q.get('richiesta') !== '0') {
   ui.richieste([r]);
 }
 
-const scena = new Scena(document.getElementById('tela')!, FISICA, trame);
+const scena = new Scena(document.getElementById('tela')!, FISICA, trame, serie);
 document.getElementById('caricamento')?.remove();
 
 const formula = leggiFormula(q.get('formula') ?? '1d100+1d20+1d12+1d10+1d8+1d6+1d4');
@@ -89,8 +103,18 @@ const tiro = lancioFermo(
   Number(q.get('seme') ?? 1),
   (c, pose) => (naturale === '20' ? c.nat20 : naturale === '1' ? c.nat1 : true) && (q.get('sponda') !== 'vicina' || controSponda(pose)),
 );
-scena.impostaDadi(tiro.specs);
-tiro.pose.forEach((p, i) => scena.posa(i, p.p, p.q));
+scena.impostaDadi(tiro.specs, q.get('master') === '1' ? 'master' : 'giocatore');
+const tempo = q.get('tempo');
+if (tempo === null) tiro.pose.forEach((p, i) => scena.posa(i, p.p, p.q));
+else {
+  // Lo stesso lancio, fermato a metà strada.
+  const l = vassoio.lancia(tiro.specs, fonteDaSeme(tiro.seme));
+  while (l.stato === 'in corso' && l.tempo < Number(tempo)) l.passo();
+  vassoio.dadi.forEach((d, i) => {
+    const p = vassoio.posa(d);
+    scena.posa(i, p.p, p.q);
+  });
+}
 
 // I toni come li dà il tavolo: scartati attenuati, il d20 naturale in oro o in rosso.
 let indice = 0;

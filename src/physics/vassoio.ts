@@ -1,4 +1,5 @@
-// Il vassoio: un mondo Rapier con fondo, sponde e coperchio invisibile, e i dadi di un tiro.
+// Il vassoio: un mondo Rapier con la corte (fondo, sponde, coperchio invisibile), la torre dei dadi
+// sul lato di fondo e i dadi di un tiro, che cadono nella torre a ondate ed escono a rotolare nella corte.
 // Lo stesso codice gira nel browser (un passo alla volta, dentro i fotogrammi) e in Node
 // (le prove di equità, a ciclo continuo).
 
@@ -6,9 +7,11 @@ import RAPIER from '@dimforge/rapier3d-compat';
 import { type Forma, type Ruolo, geometria, valoreDaLettura } from '../shared/dadi.ts';
 import { leggi } from '../shared/lettura.ts';
 import { tr } from '../shared/lingua.ts';
-import { type Quat, type V3, normalizza, punto, quatDaAsseAngolo, ruota } from '../shared/vettori.ts';
-import { type Fonte, direzioneUniforme, intervallo, mescola, quatUniforme } from './casuale.ts';
+import { rotazioniDelSolido } from '../shared/simmetrie.ts';
+import { type Quat, type V3, prodotto } from '../shared/vettori.ts';
+import { type Fonte, direzioneUniforme, intero, intervallo, mescola, quatUniforme } from './casuale.ts';
 import { FISICA, type ConfigFisica } from './config.ts';
+import { type MisureTorre, type PuntoProfilo, celleDellaBocca, misureTorre } from './torre.ts';
 
 export type Rapier = typeof RAPIER;
 
@@ -24,10 +27,26 @@ export interface SpecDado {
   ruolo: Ruolo;
 }
 
-export type MotivoRitiro = 'storto' | 'uscito' | 'non si ferma';
+export type MotivoRitiro = 'storto' | 'uscito' | 'non si ferma' | 'nella torre';
+
+/** Come parte un dado: lo decide il caso al momento del lancio, e vale quando tocca alla sua ondata. */
+export interface Partenza {
+  p: V3;
+  q: Quat;
+  /** Velocità e rotazione al rilascio. */
+  v: V3;
+  w: V3;
+}
 
 export interface DadoFisico {
   readonly indice: number;
+  /**
+   * La rotazione di simmetria che in questo lancio lega i numeri al solido: una a caso fra quelle che
+   * portano il dado su sé stesso. Il solutore di Rapier tratta vertici e pezzi del collisore in un ordine
+   * fisso, e certe facce del solido finiscono in alto un po' più spesso (il d12 fino al 4%, misurato su
+   * 100.000 lanci): così ogni volta portano un numero diverso, e ogni numero esce quanto gli altri.
+   */
+  readonly giro: Quat;
   readonly spec: SpecDado;
   readonly corpo: RAPIER.RigidBody;
   ritiri: number;
@@ -35,6 +54,10 @@ export interface DadoFisico {
   tempoFermo: number;
   /** Da quanto il dado si muove senza essersi mai fermato, in secondi. */
   inMovimentoDa: number;
+  /** Quanti secondi mancano alla sua ondata; zero quando è in gioco. */
+  attesa: number;
+  /** La partenza che lo aspetta, finché è in attesa. */
+  partenza: Partenza | null;
 }
 
 export interface LetturaFinale {
@@ -56,12 +79,24 @@ export interface OpzioniLancio {
   controlloStorto?: (indice: number, inclinazione: number) => boolean;
   /** Chiamata a ogni ritiro, prima che il dado riparta. */
   alRitiro?: (indice: number, motivo: MotivoRitiro, ritiri: number) => void;
+  /** Chiamata quando un dado che aspettava la sua ondata cade nella torre: in quel passo salta di posto. */
+  alRilascio?: (indice: number) => void;
 }
+
+/** La volta di troppo, per numero di ritiri ammessi: con tre ritiri il tiro fallisce alla quarta. */
+const VOLTE = [
+  { it: 'prima', en: 'first' },
+  { it: 'seconda', en: 'second' },
+  { it: 'terza', en: 'third' },
+  { it: 'quarta', en: 'fourth' },
+  { it: 'quinta', en: 'fifth' },
+] as const;
 
 /** Che cosa ha fatto un dado da ritirare, nelle frasi dopo il suo nome. */
 export function nomeMotivo(m: MotivoRitiro): string {
   if (m === 'storto') return tr({ it: 'si è fermato storto', en: 'came to rest tilted' });
   if (m === 'uscito') return tr({ it: 'è uscito dal vassoio', en: 'left the tray' });
+  if (m === 'nella torre') return tr({ it: 'è rimasto nella torre', en: 'stayed in the tower' });
   return tr({ it: 'non si è fermato', en: 'did not come to rest' });
 }
 
@@ -133,6 +168,7 @@ export class Vassoio {
   readonly cfg: ConfigFisica;
   /** Il piano del fondo, per le prove sui contatti. */
   readonly fondo: RAPIER.Collider;
+  readonly torre: MisureTorre;
   private readonly R: Rapier;
   private dadiAttuali: DadoFisico[] = [];
   private lancioAttuale: Lancio | null = null;
@@ -144,6 +180,8 @@ export class Vassoio {
     this.world.timestep = cfg.passo;
     this.world.lengthUnit = cfg.unitaPerMetro;
     this.world.integrationParameters.numSolverIterations = cfg.iterazioniSolutore;
+    this.world.integrationParameters.normalizedPredictionDistance = cfg.previsione / cfg.unitaPerMetro;
+    this.torre = misureTorre(cfg);
     this.fondo = this.costruisciVassoio();
   }
 
@@ -175,7 +213,35 @@ export class Vassoio {
     piano([0, 0, 1], [0, 0, -D / 2], as, rs, GRUPPI.sponda);
     piano([0, 0, -1], [0, 0, D / 2], as, rs, GRUPPI.sponda);
     piano([0, -1, 0], [0, H, 0], as, rs, GRUPPI.sponda);
+    this.costruisciTorre(fisso);
     return fondo;
+  }
+
+  /**
+   * La torre: la parete verso la corte, sopra l'arco, è una scatola; gli scivoli e la rampa d'uscita sono
+   * cunei. Contro scatole e cunei Rapier appoggia una faccia con al più quattro punti e ne scarta qualcuno:
+   * qui non conta, perché nella torre nessun dado si ferma (chi ci resta si ritira) e la lettura si fa sul
+   * fondo della corte, che è un piano. La parete sale fino al coperchio: sopra l'orlo non si vede, e tiene
+   * in canna i dadi che cadono.
+   */
+  private costruisciTorre(fisso: RAPIER.RigidBody): void {
+    const R = this.R;
+    const T = this.cfg.torre;
+    const H = this.cfg.vassoio.coperchio;
+    const { x0, x1, z1, z2, arco, scivoli, rampa } = this.torre;
+    const posa = (desc: RAPIER.ColliderDesc) =>
+      this.world.createCollider(desc.setFriction(T.attrito).setRestitution(T.rimbalzo).setCollisionGroups(GRUPPI.sponda), fisso);
+    /** Un profilo nel piano z-y, lungo quanto la torre è larga. */
+    const cuneo = (profilo: readonly PuntoProfilo[]) => {
+      const punti: number[] = [];
+      for (const [z, y] of profilo) punti.push(x0, y, z, x1, y, z);
+      const desc = R.ColliderDesc.convexHull(new Float32Array(punti));
+      if (!desc) throw new Error('torre: cuneo non costruibile');
+      posa(desc);
+    };
+    posa(R.ColliderDesc.cuboid((x1 - x0) / 2, (H - arco) / 2, (z2 - z1) / 2).setTranslation((x0 + x1) / 2, (arco + H) / 2, (z1 + z2) / 2));
+    for (const s of scivoli) cuneo(s);
+    cuneo(rampa);
   }
 
   get dadi(): readonly DadoFisico[] {
@@ -197,15 +263,13 @@ export class Vassoio {
   lancia(specs: readonly SpecDado[], fonte: Fonte, opzioni: OpzioniLancio = {}): Lancio {
     this.pulisci();
     const R = this.R;
-    const posti = this.postiDiLancio(fonte, specs.length);
-    const lato = posti.lato;
+    const partenze = this.partenze(fonte, specs.length);
     this.dadiAttuali = specs.map((spec, indice) => {
       const desc = R.RigidBodyDesc.dynamic()
         .setLinearDamping(this.cfg.dado.smorzamentoLineare)
         .setAngularDamping(this.cfg.dado.smorzamentoAngolare)
-        // Senza CCD: un piano non si attraversa, e fra dado e dado bastano i contatti anticipati di
-        // Rapier. Col CCD durate, ritiri e falliti erano gli stessi, e il passo costava il 10% in più
-        // (un terzo nei passi più pesanti).
+        // Senza CCD: un piano non si attraversa, le pareti e gli scivoli della torre sono spessi più di
+        // quanto un dado percorre in un passo, e fra dado e dado bastano i contatti anticipati di Rapier.
         .setCanSleep(false);
       const corpo = this.world.createRigidBody(desc);
       const collisore = (punti: Float32Array, densita: number, gruppo: number) => {
@@ -226,113 +290,107 @@ export class Vassoio {
         for (const pezzo of pezzi) collisore(pezzo, this.cfg.dado.densita, GRUPPI.pezziD12);
         collisore(new Float32Array(geometria(spec.forma).vertici.flat()), 0, GRUPPI.guscioD12);
       }
-      const dado: DadoFisico = { indice, spec, corpo, ritiri: 0, tempoFermo: 0, inMovimentoDa: 0 };
-      this.getta(dado, posti.punti[indice]!, lato, fonte);
+      const giri = rotazioniDelSolido(spec.forma);
+      const giro = giri[intero(fonte, giri.length)]!;
+      const dado: DadoFisico = { indice, giro, spec, corpo, ritiri: 0, tempoFermo: 0, inMovimentoDa: 0, attesa: 0, partenza: null };
+      this.metti(dado, partenze[indice]!);
       return dado;
     });
     this.lancioAttuale = new Lancio(this, fonte, opzioni);
     return this.lancioAttuale;
   }
 
-  /**
-   * Posti di partenza: una griglia nella fascia vicina alla sponda del lato scelto,
-   * a strati, con le celle in ordine casuale. Celle larghe quanto il dado più grande,
-   * così i dadi non nascono compenetrati.
-   */
-  postiDiLancio(fonte: Fonte, quanti: number, lato?: 1 | -1): { lato: 1 | -1; punti: V3[] } {
-    const { larghezza: W, profondita: D, coperchio: H } = this.cfg.vassoio;
+  /** I centri delle celle della bocca, alla quota da cui i dadi cadono. */
+  celleDellaBocca(): V3[] {
     const L = this.cfg.lancio;
-    const s: 1 | -1 = lato ?? (fonte.uniforme() < 0.5 ? -1 : 1);
-    const passo = L.passoGriglia;
-    const colonne = Math.max(1, Math.floor(L.fascia / passo));
-    const righe = Math.max(1, Math.floor((D - 1) / passo));
-    const celle: V3[] = [];
-    for (let y = L.altezzaMinima; y + passo / 2 < H; y += passo) {
-      for (let c = 0; c < colonne; c++) {
-        for (let r = 0; r < righe; r++) {
-          const x = s * (W / 2 - 0.5 - passo / 2 - c * passo);
-          const z = -((righe - 1) * passo) / 2 + r * passo;
-          celle.push([x, y, z]);
-        }
+    const quota = this.torre.alta + L.sopraLOrlo;
+    return celleDellaBocca(this.torre, L.passoGriglia, L.gioco).map(([x, z]): V3 => [x, quota, z]);
+  }
+
+  /**
+   * Le partenze di `quanti` dadi, a ondate: in ogni ondata un dado per cella della bocca, e fra un'ondata
+   * e la seguente il tempo che serve alla prima per sgombrare. Posto, ondata, orientamento (uniforme su
+   * tutte le rotazioni), velocità e rotazione li sceglie il caso, e nessuno dipende da com'è girato il dado.
+   */
+  partenze(fonte: Fonte, quanti: number): { partenza: Partenza; attesa: number }[] {
+    const L = this.cfg.lancio;
+    const celle = this.celleDellaBocca();
+    const onda = Math.max(1, Math.min(L.onda, celle.length));
+    const tutte: { partenza: Partenza; attesa: number }[] = [];
+    for (let i = 0; i < quanti; i += onda) {
+      const libere = mescola(fonte, [...celle]);
+      for (let k = 0; k < onda && i + k < quanti; k++) {
+        const c = libere[k]!;
+        const verso = 2 * Math.PI * fonte.uniforme();
+        const deriva = L.deriva * fonte.uniforme();
+        const asse = direzioneUniforme(fonte);
+        const giri = intervallo(fonte, L.rotazioneMinima, L.rotazioneMassima);
+        tutte.push({
+          attesa: (i / onda) * L.intervallo,
+          partenza: {
+            p: [c[0] + intervallo(fonte, -L.scarto, L.scarto), c[1] + intervallo(fonte, -L.scarto, L.scarto), c[2] + intervallo(fonte, -L.scarto, L.scarto)],
+            q: quatUniforme(fonte),
+            v: [Math.cos(verso) * deriva, -intervallo(fonte, L.cadutaMinima, L.cadutaMassima), Math.sin(verso) * deriva],
+            w: [asse[0] * giri, asse[1] * giri, asse[2] * giri],
+          },
+        });
       }
     }
-    if (celle.length < quanti) throw new Error(`posti di lancio insufficienti: ${celle.length} per ${quanti} dadi`);
-    mescola(fonte, celle);
-    const punti = celle.slice(0, quanti).map(
-      (p): V3 => [
-        p[0] + intervallo(fonte, -L.scarto, L.scarto),
-        p[1] + intervallo(fonte, -L.scarto, L.scarto),
-        p[2] + intervallo(fonte, -L.scarto, L.scarto),
-      ],
-    );
-    return { lato: s, punti };
+    // Chi cade per primo lo decide il caso.
+    return mescola(fonte, tutte);
   }
 
   /**
-   * Il lancio dalla mano: dal posto sulla sponda verso un punto della parte lontana del vassoio,
-   * con una deviazione, sempre verso l'interno.
+   * Mette un dado alla sua partenza. Se la sua ondata non è la prima aspetta fermo, fuori dal mondo, più
+   * in alto di ogni inquadratura; `avvia` lo fa cadere.
    */
-  getta(dado: DadoFisico, posizione: V3, lato: 1 | -1, fonte: Fonte): void {
-    const L = this.cfg.lancio;
-    const { larghezza: W, profondita: D } = this.cfg.vassoio;
-    const bersaglio: V3 = [
-      -lato * intervallo(fonte, -W / 6, W / 2 - 4),
-      0,
-      intervallo(fonte, -(D / 2 - 3), D / 2 - 3),
-    ];
-    let dir = normalizza([bersaglio[0] - posizione[0], 0, bersaglio[2] - posizione[2]]);
-    const deviazione = (intervallo(fonte, -L.deviazione, L.deviazione) * Math.PI) / 180;
-    dir = ruota(quatDaAsseAngolo([0, 1, 0], deviazione), dir);
-    if (punto(dir, [-lato, 0, 0]) < 0.2) dir = normalizza([-lato, 0, dir[2]]);
-    const v = intervallo(fonte, L.velocitaMinima, L.velocitaMassima);
-    this.metti(dado, posizione, [dir[0] * v, -intervallo(fonte, 0, L.caduta), dir[2] * v], fonte);
-  }
-
-  /**
-   * Il ritiro: il dado si raccoglie e si rilascia dall'alto sopra il punto più libero del vassoio,
-   * con poca spinta di lato e la rotazione piena, come lo si rilancia a mano dov'è spazio.
-   */
-  rilascia(dado: DadoFisico, altri: readonly DadoFisico[], altezza: number, fonte: Fonte): void {
-    const L = this.cfg.lancio;
-    const { larghezza: W, profondita: D } = this.cfg.vassoio;
-    const occupati = altri.map((d) => d.corpo.translation());
-    let migliore: V3 = [0, altezza, 0];
-    let distanza = -1;
-    for (let k = 0; k < 16; k++) {
-      const p: V3 = [intervallo(fonte, -(W / 2 - 3), W / 2 - 3), altezza, intervallo(fonte, -(D / 2 - 3), D / 2 - 3)];
-      const vicino = occupati.reduce((m, t) => Math.min(m, Math.hypot(t.x - p[0], t.z - p[2])), Infinity);
-      if (vicino > distanza) {
-        distanza = vicino;
-        migliore = p;
-      }
-    }
-    const a = 2 * Math.PI * fonte.uniforme();
-    const v = intervallo(fonte, L.spintaRitiroMinima, L.spintaRitiroMassima);
-    this.metti(dado, migliore, [Math.cos(a) * v, -intervallo(fonte, 0, L.caduta), Math.sin(a) * v], fonte);
-  }
-
-  /** Posizione, orientamento uniforme, velocità data e rotazione su un asse uniforme. */
-  private metti(dado: DadoFisico, posizione: V3, velocita: V3, fonte: Fonte): void {
-    const L = this.cfg.lancio;
-    const q = quatUniforme(fonte);
-    const asse = direzioneUniforme(fonte);
-    const w = intervallo(fonte, L.rotazioneMinima, L.rotazioneMassima);
+  metti(dado: DadoFisico, come: { partenza: Partenza; attesa: number }): void {
+    const { p, q } = come.partenza;
     const c = dado.corpo;
-    c.setTranslation({ x: posizione[0], y: posizione[1], z: posizione[2] }, true);
-    c.setRotation(q, true);
-    c.setLinvel({ x: velocita[0], y: velocita[1], z: velocita[2] }, true);
-    c.setAngvel({ x: asse[0] * w, y: asse[1] * w, z: asse[2] * w }, true);
+    dado.partenza = come.partenza;
+    dado.attesa = come.attesa;
+    dado.tempoFermo = 0;
+    dado.inMovimentoDa = 0;
+    c.setEnabled(false);
+    c.setTranslation({ x: p[0], y: p[1] + this.cfg.lancio.parcheggio, z: p[2] }, false);
+    c.setRotation(q, false);
+    c.setLinvel({ x: 0, y: 0, z: 0 }, false);
+    c.setAngvel({ x: 0, y: 0, z: 0 }, false);
+    if (come.attesa <= 0) this.avvia(dado);
+  }
+
+  /** Tocca alla sua ondata: il dado entra nel mondo alla sua partenza e cade nella torre. */
+  avvia(dado: DadoFisico): void {
+    const come = dado.partenza;
+    if (!come) return;
+    const c = dado.corpo;
+    c.setEnabled(true);
+    c.setTranslation({ x: come.p[0], y: come.p[1], z: come.p[2] }, true);
+    c.setRotation(come.q, true);
+    c.setLinvel({ x: come.v[0], y: come.v[1], z: come.v[2] }, true);
+    c.setAngvel({ x: come.w[0], y: come.w[1], z: come.w[2] }, true);
     c.resetForces(true);
     c.resetTorques(true);
+    dado.partenza = null;
+    dado.attesa = 0;
     dado.tempoFermo = 0;
     dado.inMovimentoDa = 0;
   }
 
-  /** Posizione e rotazione di un dado, per il disegno. */
+  /** Vero se il dado sta dentro la torre: nella canna, o sulla rampa sotto l'arco. */
+  nellaTorre(dado: DadoFisico): boolean {
+    return dado.corpo.translation().z < this.torre.z2;
+  }
+
+  /** Com'è girato il dado coi suoi numeri: la rotazione del corpo, col giro di questo lancio. */
+  orientamento(dado: DadoFisico): Quat {
+    return prodotto(dado.corpo.rotation(), dado.giro);
+  }
+
+  /** Posizione e orientamento di un dado, per il disegno. */
   posa(dado: DadoFisico): { p: V3; q: Quat } {
     const t = dado.corpo.translation();
-    const r = dado.corpo.rotation();
-    return { p: [t.x, t.y, t.z], q: { x: r.x, y: r.y, z: r.z, w: r.w } };
+    return { p: [t.x, t.y, t.z], q: this.orientamento(dado) };
   }
 
   /** Dentro il volume del vassoio, col margine. */
@@ -374,12 +432,25 @@ export class Lancio {
     if (this.stato !== 'in corso') return;
     const cfg = this.v.cfg;
     const dt = cfg.passo;
+    for (const d of this.v.dadi) {
+      if (!d.partenza) continue;
+      d.attesa -= dt;
+      if (d.attesa <= 1e-9) {
+        this.v.avvia(d);
+        this.opzioni.alRilascio?.(d.indice);
+      }
+    }
     this.v.world.step();
     this.tempo += dt;
 
     const daRitirare: { d: DadoFisico; motivo: MotivoRitiro }[] = [];
     let tuttiFermi = true;
     for (const d of this.v.dadi) {
+      // Chi aspetta la sua ondata non è ancora in gioco.
+      if (d.partenza) {
+        tuttiFermi = false;
+        continue;
+      }
       if (!this.v.dentro(d)) {
         daRitirare.push({ d, motivo: 'uscito' });
         tuttiFermi = false;
@@ -404,10 +475,15 @@ export class Lancio {
     if (daRitirare.length === 0 && tuttiFermi) {
       const letture = this.v.dadi.map((d) => {
         const g = geometria(d.spec.forma);
-        const l = leggi(g, d.corpo.rotation());
+        const l = leggi(g, this.v.orientamento(d));
         return { d, l };
       });
       for (const { d, l } of letture) {
+        // Si legge soltanto sul fondo della corte: un dado fermo nella torre si è incastrato.
+        if (this.v.nellaTorre(d)) {
+          daRitirare.push({ d, motivo: 'nella torre' });
+          continue;
+        }
         const storto = this.opzioni.controlloStorto
           ? this.opzioni.controlloStorto(d.indice, l.inclinazione)
           : l.inclinazione > cfg.tolleranzaStorto;
@@ -446,22 +522,18 @@ export class Lancio {
     for (const { d, motivo } of lista) {
       if (d.ritiri >= cfg.ritiriMassimi) {
         const chi = `${nomeDado(d.spec)} ${nomeMotivo(motivo)}`;
-        this.fallisci(tr({ it: `${chi} per la terza volta: tiro annullato, rilancia`, en: `${chi} for the third time: roll cancelled, roll again` }));
+        const volta = VOLTE[cfg.ritiriMassimi] ?? VOLTE.at(-1)!;
+        this.fallisci(tr({ it: `${chi} per la ${volta.it} volta: tiro annullato, rilancia`, en: `${chi} for the ${volta.en} time: roll cancelled, roll again` }));
         return;
       }
     }
-    // Uno alla volta, così ognuno sceglie il suo punto libero vedendo anche quelli già rimessi in aria.
+    // I ritirati tornano nella bocca della torre, a ondate come al lancio.
+    const partenze = this.v.partenze(this.fonte, lista.length);
     lista.forEach(({ d, motivo }, k) => {
       d.ritiri += 1;
       this.registroRitiri.push({ indice: d.indice, motivo });
       this.opzioni.alRitiro?.(d.indice, motivo, d.ritiri);
-      const altezza = cfg.lancio.altezzaRitiro + (k % 3) * cfg.lancio.passoGriglia;
-      this.v.rilascia(
-        d,
-        this.v.dadi.filter((x) => x !== d),
-        altezza,
-        this.fonte,
-      );
+      this.v.metti(d, partenze[k]!);
     });
   }
 

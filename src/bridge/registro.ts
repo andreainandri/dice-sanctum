@@ -10,6 +10,7 @@ import {
   type RichiestaCreata,
   type TiroCompletato,
   type TiroDalTavolo,
+  type TiroDelMaster,
   numera,
 } from '../shared/eventi.ts';
 
@@ -64,7 +65,7 @@ export class Registro {
     if (typeof e !== 'object' || e === null) return false;
     const x = e as Record<string, unknown>;
     if (x.v !== 1 || typeof x.seq !== 'number' || x.seq <= this.ultimoSeq) return false;
-    return x.type === 'request.created' || x.type === 'roll.completed' || x.type === 'request.cancelled';
+    return x.type === 'request.created' || x.type === 'roll.completed' || x.type === 'request.cancelled' || x.type === 'dm.roll.completed';
   }
 
   /** Aggiorna lo stato in memoria con un evento già numerato. */
@@ -77,7 +78,7 @@ export class Registro {
     } else if (e.type === 'request.cancelled') {
       const r = this.richieste.get(e.requestId);
       if (r && r.stato === 'aperta') r.stato = 'annullata';
-    } else {
+    } else if (e.type === 'roll.completed') {
       this.tiriPerId.set(e.id, e);
       if (e.requestId) {
         const r = this.richieste.get(e.requestId);
@@ -132,12 +133,12 @@ export class Registro {
     return this.eventi.slice(basso, basso + limite);
   }
 
-  /** Gli ultimi `quanti` tiri, dal più vecchio al più nuovo. */
-  ultimiTiri(quanti: number): TiroCompletato[] {
-    const tiri: TiroCompletato[] = [];
+  /** Gli ultimi `quanti` tiri, del tavolo e del master, dal più vecchio al più nuovo. */
+  ultimiTiri(quanti: number): (TiroCompletato | TiroDelMaster)[] {
+    const tiri: (TiroCompletato | TiroDelMaster)[] = [];
     for (let i = this.eventi.length - 1; i >= 0 && tiri.length < quanti; i--) {
       const e = this.eventi[i]!;
-      if (e.type === 'roll.completed') tiri.push(e);
+      if (e.type === 'roll.completed' || e.type === 'dm.roll.completed') tiri.push(e);
     }
     return tiri.reverse();
   }
@@ -161,6 +162,11 @@ export class Registro {
   /** Registra un tiro già verificato. */
   registraTiro(t: TiroDalTavolo): TiroCompletato {
     return this.scrivi<TiroCompletato>(t);
+  }
+
+  /** Registra un tiro del master: non tocca nessuna richiesta. */
+  registraTiroDelMaster(t: Omit<TiroDelMaster, 'seq'>): TiroDelMaster {
+    return this.scrivi<TiroDelMaster>(t);
   }
 
   chiudi(): void {

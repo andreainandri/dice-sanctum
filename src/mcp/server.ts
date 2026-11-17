@@ -1,4 +1,4 @@
-// Il server MCP del Dice Sanctum, su stdio. Quattro strumenti per il DM e, nelle sessioni che aprono il
+// Il server MCP del Dice Sanctum, su stdio. Sei strumenti per il DM e, nelle sessioni che aprono il
 // canale, ogni tiro che il DM non ha già ricevuto da una chiamata spinto nella conversazione appena i
 // dadi si fermano. Sottile: stato e registro stanno nel ponte, che si raggiunge via HTTP e WebSocket.
 // I testi sono in inglese: li legge il modello che fa il DM, qualunque lingua parli al tavolo.
@@ -10,11 +10,12 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { type CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import WebSocket from 'ws';
 import { z } from 'zod';
-import { type Evento, type TiroCompletato } from '../shared/eventi.ts';
-import { ErroreFormula, leggiFormula } from '../shared/notazione.ts';
+import { type Evento, type TiroCompletato, type TiroDelMaster } from '../shared/eventi.ts';
+import { ErroreFormula, MASSIMO_DADI_FISICI, leggiFormula } from '../shared/notazione.ts';
 import {
   ATTESA_MASSIMA,
   type DalFeed,
+  FORMULE_PER_LANCIO,
   PORTA_DEL_PONTE,
   type RispostaAnnulla,
   type RispostaAttesa,
@@ -22,6 +23,8 @@ import {
   type RispostaEventi,
   type RispostaRichiesta,
   type RispostaStato,
+  type RispostaTiriDelMaster,
+  type RispostaTiriPerChiGioca,
 } from '../shared/protocollo.ts';
 
 const PONTE = (process.env.DICE_SANCTUM_URL ?? `http://127.0.0.1:${PORTA_DEL_PONTE}`).replace(/\/+$/, '');
@@ -30,11 +33,13 @@ const AVVIO = new Date().toISOString();
 const GIOCATORE = (process.env.DICE_SANCTUM_PLAYER ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 40) || 'the player';
 /** Il giocatore in testa di frase. */
 const GIOCATORE_IN_TESTA = GIOCATORE.charAt(0).toUpperCase() + GIOCATORE.slice(1);
-const SPENTO = `The bridge does not answer at ${PONTE}: the Dice Sanctum is off. It starts with \`npm start\` in the dice-sanctum folder.`;
+const SPENTO = `The bridge does not answer at ${PONTE}: the Dice Sanctum is off. It starts with \`npm start\` in the dice-sanctum folder, or with the table skill of the Dice Sanctum plugin.`;
 
 const ISTRUZIONI = `Dice Sanctum: the 3D dice table where ${GIOCATORE} rolls the dice of their character. It serves the DM session only; do not use it in other sessions.
 - The rolls of ${GIOCATORE} reach the conversation by themselves as <channel source="dice-sanctum" ...>, as soon as the dice stop, once each (when the session was started with the Dice Sanctum channel). Without the channel, follow the roll log with the Monitor tool, as the project README explains.
-- For a roll of the character use request_player_roll with wait_seconds (up to ${ATTESA_MASSIMA}): the roll comes back in the same call; if the time runs out, it arrives later through the channel. Do not ask the table for the DM's own rolls: they stay behind the screen.
+- For a roll of the character use request_player_roll with wait_seconds (up to ${ATTESA_MASSIMA}): the roll comes back in the same call; if the time runs out, it arrives later through the channel.
+- For the DM's own dice (monsters, companions, hidden checks) use dm_roll. Open rolls land on the table in the DM's dice, where ${GIOCATORE} watches them; with secret: true they stay behind the screen. Put the rolls of one turn in one call (attack and damage together): they land in a single throw. dm_roll never rolls the dice of ${GIOCATORE} and never fulfils a request.
+- When ${GIOCATORE} cannot be at the table and asks you to roll for them, use roll_for_player: the bridge rolls the character's dice with the same physics, the table shows them in the player's own dice, and the roll log keeps them as rolls of ${GIOCATORE} made by the DM. Use it only on their word (for one roll, or until they say they are back at the table), never on your own initiative, and tell them each result as you would read it off the table.
 - A free roll does not fulfil a request. If ${GIOCATORE} wants to roll a different formula, cancel with cancel_player_roll and ask again.
 - get_rolls(since_seq) recovers what is missing after an interruption; get_status says whether the table is open and which requests are waiting.`;
 
@@ -68,16 +73,22 @@ const testo = (t: string): CallToolResult => ({ content: [{ type: 'text', text: 
 const errore = (t: string): CallToolResult => ({ content: [{ type: 'text', text: t }], isError: true });
 const ora = (iso: string) => new Date(iso).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
 
-function naturali(t: TiroCompletato): string {
+function naturali(t: TiroCompletato | TiroDelMaster): string {
   return t.nat20 ? ' · NATURAL 20' : t.nat1 ? ' · NATURAL 1' : '';
+}
+
+/** Come è caduto un tiro del master: sul tavolo, dietro lo schermo, o senza nessuno a guardare. */
+function doveDelMaster(t: TiroDelMaster): string {
+  return t.secret ? 'behind the screen' : t.shown ? 'on the table' : 'no table connected';
 }
 
 /** Un evento in una riga, come lo legge il DM. */
 function riga(e: Evento): string {
   if (e.type === 'roll.completed') {
-    const per = e.requestId ? `for ${e.requestId}` : 'free roll';
+    const per = e.rolledBy === 'dm' ? `rolled by the DM for ${GIOCATORE}` : e.requestId ? `for ${e.requestId}` : 'free roll';
     return `#${e.seq} ${ora(e.at)} ${per} · ${e.summary}${naturali(e)}`;
   }
+  if (e.type === 'dm.roll.completed') return `#${e.seq} ${ora(e.at)} DM roll, ${doveDelMaster(e)} · ${e.summary}${naturali(e)}`;
   if (e.type === 'request.created') return `#${e.seq} ${ora(e.at)} request ${e.requestId} · ${e.label}, ${e.formula}`;
   return `#${e.seq} ${ora(e.at)} cancelled ${e.requestId}`;
 }
@@ -89,7 +100,7 @@ function guasto(e: unknown): CallToolResult {
 }
 
 const server = new McpServer(
-  { name: 'dice-sanctum', version: '0.1.0' },
+  { name: 'dice-sanctum', version: '0.2.0' },
   {
     // La chiave dei canali di Claude Code: con questa la sessione ascolta le notifiche del server.
     capabilities: { experimental: { 'claude/channel': {} } },
@@ -142,6 +153,8 @@ function dalFeed(r: DalFeed): void {
   const e = r.evento;
   ultimoVisto = Math.max(ultimoVisto ?? 0, e.seq);
   if (e.type !== 'roll.completed') return;
+  // Un tiro fatto dal DM al posto di chi gioca è uscito nella risposta alla sua chiamata: mai dal canale.
+  if (e.rolledBy === 'dm') return;
   if (r.consegnato) {
     // Uscito nella risposta a un'attesa: di questo server (che lo restituisce o, se interrotta,
     // lo spinge da sé) o di un'altra sessione. Al canale va soltanto se l'attesa qui si è interrotta.
@@ -210,7 +223,7 @@ server.registerTool(
   {
     title: 'Roll log events',
     description:
-      'The events of the roll log after since_seq (rolls, requests, cancellations), one per line with their seq; without arguments, the last 10. It recovers what is missing after an interruption; while they land, rolls arrive through the channel.',
+      "The events of the roll log after since_seq (the player's rolls, the DM's rolls, requests, cancellations), one per line with their seq; without arguments, the last 10. It recovers what is missing after an interruption; while they land, the player's rolls arrive through the channel.",
     inputSchema: {
       since_seq: z.number().int().min(0).optional().describe('the events with a seq greater than this'),
       limit: z.number().int().min(1).max(500).optional().describe('how many at most (10 without since_seq, 100 with it)'),
@@ -319,6 +332,94 @@ server.registerTool(
       if (codice === 200) return testo(`Request ${requestId} cancelled: it is no longer on the table.`);
       if (dato.tiro) return errore(`${dato.errore}: ${dato.tiro.summary}${naturali(dato.tiro)} (seq ${dato.tiro.seq}).`);
       return errore(dato.errore);
+    } catch (e) {
+      return guasto(e);
+    }
+  },
+);
+
+server.registerTool(
+  'dm_roll',
+  {
+    title: "Roll the DM's dice",
+    description: `Rolls the DM's own dice (monsters, companions, hidden checks) with the same physics as the table and writes them in the roll log. Open rolls land on the table of ${GIOCATORE} in the DM's dice set, and the call returns when the dice have come to rest there. With secret: true they stay behind the screen: the table shows only that the DM rolled, with no label, dice or total. Up to ${FORMULE_PER_LANCIO} formulas in one call land together in a single throw of at most ${MASSIMO_DADI_FISICI} dice (a d100 counts as two): put the rolls of one turn in one call (attack and damage, a save and the check after it) and read each result by its label. It never rolls the dice of ${GIOCATORE} and never fulfils a request_player_roll. With no table connected it rolls all the same and says that nobody saw it land.`,
+    inputSchema: {
+      rolls: z
+        .array(
+          z.object({
+            formula: z.string().min(1).max(200).describe('dice notation: 1d20+4, 2d20kh1+3, 3d6, 1d100'),
+            label: z.string().min(1).max(80).describe('who rolls what, in the language of the game: Wolf, bite on the paladin; the player reads it on the table when the roll is open'),
+          }),
+        )
+        .min(1)
+        .max(FORMULE_PER_LANCIO)
+        .describe('the rolls of this throw, each with its own result'),
+      secret: z.boolean().optional().describe('true keeps the whole throw behind the screen (default: false, on the table)'),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  },
+  async ({ rolls, secret }) => {
+    for (const [i, r] of rolls.entries()) {
+      try {
+        leggiFormula(r.formula);
+      } catch (e) {
+        return errore(`roll ${i + 1}: invalid formula: ${e instanceof ErroreFormula ? e.message : String(e)}`);
+      }
+    }
+    try {
+      const { codice, dato } = await chiama<RispostaTiriDelMaster & RispostaErrore>('POST', '/api/master/tiri', { tiri: rolls, segreto: secret === true });
+      if (codice !== 200) return errore(dato.errore);
+      const primo = dato.tiri[0]!;
+      const dove = primo.secret
+        ? 'behind the screen'
+        : dato.visto
+          ? `on the table of ${GIOCATORE}`
+          : `no table connected: nobody saw it land`;
+      const righe = dato.tiri.map((t) => `#${t.seq} ${t.summary}${naturali(t)}`);
+      return testo(`DM throw (${dove}):\n${righe.join('\n')}`);
+    } catch (e) {
+      return guasto(e);
+    }
+  },
+);
+
+server.registerTool(
+  'roll_for_player',
+  {
+    title: `Roll in place of ${GIOCATORE}`,
+    description: `Rolls the character's dice in place of ${GIOCATORE}, for when they cannot be at the table and have asked the DM to roll for them. The bridge throws with the same physics as the table and writes each roll in the roll log as a roll of ${GIOCATORE}, marked as made by the DM; a connected table shows the throw in the player's own dice, with the total where their own rolls go. It works with no table connected, and returns the results in the same call (they do not come through the channel). Use it only on the word of ${GIOCATORE}: for a single roll they ask for, or from when they say they are away until they say they are back. It does not fulfil an open request: cancel that one with cancel_player_roll. Up to ${FORMULE_PER_LANCIO} rolls and ${MASSIMO_DADI_FISICI} dice in one throw: put the rolls of one action together (attack and damage).`,
+    inputSchema: {
+      rolls: z
+        .array(
+          z.object({
+            formula: z.string().min(1).max(200).describe('dice notation: 1d20+3, 2d20kh1+5, 4d6kh3, 8d6, 1d100'),
+            label: z.string().min(1).max(80).describe('what the character rolls, in the language of the game: Constitution saving throw, Longsword attack'),
+          }),
+        )
+        .min(1)
+        .max(FORMULE_PER_LANCIO)
+        .describe('the rolls of this throw, each with its own result'),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  },
+  async ({ rolls }) => {
+    for (const [i, r] of rolls.entries()) {
+      try {
+        leggiFormula(r.formula);
+      } catch (e) {
+        return errore(`roll ${i + 1}: invalid formula: ${e instanceof ErroreFormula ? e.message : String(e)}`);
+      }
+    }
+    try {
+      const { codice, dato } = await chiama<RispostaTiriPerChiGioca & RispostaErrore>('POST', '/api/giocatore/tiri', { tiri: rolls });
+      if (codice !== 200) return errore(dato.errore);
+      const dove = dato.visto ? 'shown on their table' : 'no table connected: it is in the roll log, nobody saw it land';
+      const righe = dato.tiri.map((t) => `#${t.seq} ${t.summary}${naturali(t)}`);
+      const aperte =
+        dato.richiesteAperte.length === 0
+          ? ''
+          : `\nStill open on the table, not fulfilled by this throw: ${dato.richiesteAperte.map((r) => `${r.requestId} (${r.label}, ${r.formula})`).join('; ')}. Cancel what this throw replaced.`;
+      return testo(`Rolled in place of ${GIOCATORE} (${dove}):\n${righe.join('\n')}${aperte}`);
     } catch (e) {
       return guasto(e);
     }

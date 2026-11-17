@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import WebSocket from 'ws';
-import { Ponte } from '../src/bridge/ponte.ts';
+import { type OpzioniPonte, Ponte } from '../src/bridge/ponte.ts';
 import { type DadoLetto, calcola } from '../src/shared/conto.ts';
 import { type TiroDalTavolo, tiroDalTavolo } from '../src/shared/eventi.ts';
 import { leggiFormula } from '../src/shared/notazione.ts';
@@ -25,8 +25,8 @@ export function cartellaDiProva(): { registro: string; client: string; via(): vo
   return { registro: join(dir, 'dati', 'tiri.jsonl'), client, via: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
-export async function accendiPonte(registro: string, client: string, porta = 0): Promise<Ponte> {
-  const p = new Ponte({ porta, registro, cartellaClient: client, log: () => {} });
+export async function accendiPonte(registro: string, client: string, porta = 0, altro: Partial<OpzioniPonte> = {}): Promise<Ponte> {
+  const p = new Ponte({ porta, registro, cartellaClient: client, log: () => {}, ...altro });
   await p.avvia();
   return p;
 }

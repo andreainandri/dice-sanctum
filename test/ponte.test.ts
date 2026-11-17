@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import WebSocket from 'ws';
 import { type Ponte } from '../src/bridge/ponte.ts';
-import { type Evento, type RichiestaCreata, type TiroCompletato } from '../src/shared/eventi.ts';
+import { type Evento, type EventoPerIlTavolo, type RichiestaCreata, type TiroCompletato } from '../src/shared/eventi.ts';
 import { type DalFeed, type RispostaAttesa } from '../src/shared/protocollo.ts';
 import { TavoloDiProva, accendiPonte, cartellaDiProva, dormi, tiro } from './aiuti.ts';
 
@@ -272,7 +272,7 @@ describe('il ponte: registro, tavolo e richieste', () => {
   });
 
   /** L'evento che il ponte diffonde ai tavoli, per tipo e per id o requestId. */
-  const evento = <T extends Evento>(t: TavoloDiProva, criterio: (e: Evento) => boolean) =>
+  const evento = <T extends Evento>(t: TavoloDiProva, criterio: (e: EventoPerIlTavolo) => boolean) =>
     t.aspetta((m) => m.tipo === 'evento' && criterio(m.evento)).then((m) => (m as unknown as { evento: T }).evento);
 
   it('senza tavolo collegato una richiesta è un errore chiaro', async () => {

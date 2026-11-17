@@ -1,0 +1,36 @@
+{
+  "name": "dice-sanctum",
+  "displayName": "The Dice Sanctum",
+  "version": "0.2.0",
+  "description": "A 3D dice table with real physics for tabletop role-playing with Claude as the game master: the player rolls in the browser, every roll reaches the session, and the master's own dice land on the same tray.",
+  "author": {
+    "name": "Andrea Inandri",
+    "url": "https://github.com/andreainandri"
+  },
+  "homepage": "https://github.com/andreainandri/dice-sanctum",
+  "repository": "https://github.com/andreainandri/dice-sanctum",
+  "license": "MIT",
+  "keywords": ["dice", "ttrpg", "tabletop", "game-master", "mcp", "channel"],
+  "mcpServers": {
+    "table": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/src/mcp/server.ts"],
+      "env": {
+        "DICE_SANCTUM_PLAYER": "${user_config.player_name}"
+      }
+    }
+  },
+  "channels": [
+    {
+      "server": "table",
+      "displayName": "The Dice Sanctum"
+    }
+  ],
+  "userConfig": {
+    "player_name": {
+      "type": "string",
+      "title": "Player name",
+      "description": "The name of whoever rolls at the table, as the game master reads it in the results. Leave it empty for \"the player\"."
+    }
+  }
+}

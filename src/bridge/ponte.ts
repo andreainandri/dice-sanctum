@@ -3,23 +3,39 @@
 //
 //   /ws          il tavolo (il browser): stato all'arrivo, eventi dal vivo, tiri da registrare
 //   /feed        gli eventi per il server MCP: quelli dopo ?dopo=seq (o dal ?dal=ora), poi dal vivo
-//   /api/...     stato, eventi, richieste di tiro, attese e annullamenti
+//   /api/...     stato, eventi, richieste di tiro, attese e annullamenti, i tiri del master e quelli
+//                che il master fa al posto di chi gioca
 //   il resto     i file della pagina, da dist/client
 
+import { randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { extname, join, normalize, resolve, sep } from 'node:path';
 import { WebSocketServer, type WebSocket } from 'ws';
-import { type Evento, type RichiestaCreata, type TiroCompletato } from '../shared/eventi.ts';
-import { ErroreFormula, leggiFormula } from '../shared/notazione.ts';
+import {
+  type Evento,
+  type RichiestaAnnullata,
+  type RichiestaCreata,
+  type TiroCompletato,
+  type VoceDiCronaca,
+  copri,
+  tiroDelMaster,
+  tiroPerChiGioca,
+} from '../shared/eventi.ts';
+import { ErroreFormula, type Formula, MASSIMO_DADI_FISICI, leggiFormula } from '../shared/notazione.ts';
 import {
   ATTESA_MASSIMA,
   type DalFeed,
   type DalPonte,
+  FORMULE_PER_LANCIO,
+  PAUSA_DOPO_IL_MASTER,
   type ProblemaRichiesta,
   type RispostaAttesa,
   type RispostaStato,
+  type RispostaTiriDelMaster,
+  type RispostaTiriPerChiGioca,
 } from '../shared/protocollo.ts';
+import { type LancioDelMaster, ManoDelMaster } from './master.ts';
 import { Registro } from './registro.ts';
 import { ID_RICHIESTA, TiroRespinto, verificaTiro } from './verifica.ts';
 
@@ -27,6 +43,8 @@ const CARICO_MASSIMO = 64 * 1024;
 /** Quanti tiri tornano in cronaca quando un tavolo si collega. */
 const CRONACA_AL_COLLEGAMENTO = 200;
 const BATTITO_MS = 15000;
+/** Il DM non aspetta la fine di una ripresa più di tanto: oltre, la risposta parte coi dadi ancora in moto. */
+const ATTESA_DELLA_RIPRESA_MS = 30000;
 
 export interface OpzioniPonte {
   /** 0 per una porta libera qualsiasi (le prove). */
@@ -34,6 +52,11 @@ export interface OpzioniPonte {
   registro: string;
   cartellaClient: string;
   log?: (riga: string) => void;
+  /**
+   * Quanto dura per il ponte l'attesa di una ripresa, rispetto alla ripresa vera: 1 di serie; le prove la
+   * accorciano per non aspettare i secondi di ogni lancio.
+   */
+  ritmoDelleRiprese?: number;
 }
 
 interface Attesa {
@@ -74,6 +97,7 @@ export class Ponte {
   readonly registro: Registro;
   private readonly opzioni: OpzioniPonte;
   private readonly log: (riga: string) => void;
+  private readonly ritmoDelleRiprese: number;
   private readonly server: Server;
   private readonly wssTavolo = new WebSocketServer({ noServer: true, maxPayload: CARICO_MASSIMO });
   private readonly wssFeed = new WebSocketServer({ noServer: true, maxPayload: 1024 });
@@ -86,10 +110,17 @@ export class Ponte {
   private codaFeed: Promise<void> = Promise.resolve();
   private battito: NodeJS.Timeout | null = null;
   private portaVera = 0;
+  private readonly mano = new ManoDelMaster();
+  /** Quando finisce l'ultima ripresa mandata ai tavoli: un lancio del master parte dopo quello di prima. */
+  private fineRipresa = 0;
+  /** Le risposte al DM che aspettano la fine della loro ripresa. */
+  private readonly pause = new Set<{ timer: NodeJS.Timeout; via: () => void }>();
+  private spento = false;
 
   constructor(opzioni: OpzioniPonte) {
     this.opzioni = opzioni;
     this.log = opzioni.log ?? ((r) => console.log(`${new Date().toISOString()} ${r}`));
+    this.ritmoDelleRiprese = opzioni.ritmoDelleRiprese ?? 1;
     this.registro = new Registro(opzioni.registro);
     for (const s of this.registro.scartate) this.log(`roll log: line ${s.riga} unreadable, skipped: ${inRiga(s.testo)}`);
     this.server = createServer((req, res) => {
@@ -148,7 +179,14 @@ export class Ponte {
 
   /** Chi aspetta riceve «in attesa» (la richiesta resta aperta nel registro), poi si chiude tutto. */
   async ferma(): Promise<void> {
+    this.spento = true;
     if (this.battito) clearInterval(this.battito);
+    // I tiri del master sono già nel registro: chi aspettava la fine della ripresa ha subito la risposta.
+    for (const p of [...this.pause]) {
+      clearTimeout(p.timer);
+      p.via();
+    }
+    await Promise.resolve();
     for (const lista of [...this.attese.values()]) {
       for (const a of [...lista]) {
         this.togliAttesa(a);
@@ -161,6 +199,7 @@ export class Ponte {
     await chiuso;
     await this.codaFeed;
     this.registro.chiudi();
+    this.mano.libera();
     this.log('bridge stopped');
   }
 
@@ -196,6 +235,8 @@ export class Ponte {
     if (metodo === 'POST') {
       const corpo = await this.corpo(req);
       if (url.pathname === '/api/richieste') return this.chiedi(corpo, res);
+      if (url.pathname === '/api/master/tiri') return this.tiraIlMaster(corpo, res);
+      if (url.pathname === '/api/giocatore/tiri') return this.tiraPerChiGioca(corpo, res);
       const m = /^\/api\/richieste\/([^/]+)\/(attendi|annulla)$/.exec(url.pathname);
       if (m) {
         const requestId = m[1]!;
@@ -370,6 +411,131 @@ export class Ponte {
     this.json(res, 200, { evento });
   }
 
+  // ---- i tiri del master ----
+
+  /** Le formule di un lancio chiesto dal DM, lette e contate: da una a otto, ognuna con la sua etichetta. */
+  private vociDelLancio(corpo: Record<string, unknown>, cosa: string): { formula: Formula; label: string }[] {
+    const chiesti: unknown = corpo.tiri;
+    if (!Array.isArray(chiesti) || chiesti.length === 0) throw new ErroreHttp(400, 'tiri must be a list with at least one roll');
+    if (chiesti.length > FORMULE_PER_LANCIO) throw new ErroreHttp(400, `at most ${FORMULE_PER_LANCIO} rolls in one throw`);
+    const voci = chiesti.map((x: unknown, i): { formula: Formula; label: string } => {
+      const quale = `roll ${i + 1}`;
+      if (typeof x !== 'object' || x === null || Array.isArray(x)) throw new ErroreHttp(400, `${quale}: an object with formula and label is required`);
+      const { formula, label } = x as Record<string, unknown>;
+      if (typeof formula !== 'string') throw new ErroreHttp(400, `${quale}: the formula is missing`);
+      let f: Formula;
+      try {
+        f = leggiFormula(formula);
+      } catch (e) {
+        throw new ErroreHttp(400, `${quale}: ${e instanceof ErroreFormula ? e.message : 'invalid formula'}`);
+      }
+      const etichetta = typeof label === 'string' ? label.trim() : '';
+      if (etichetta === '') throw new ErroreHttp(400, `${quale}: the label is missing: ${cosa}`);
+      if (etichetta.length > 80) throw new ErroreHttp(400, `${quale}: the label is over 80 characters`);
+      return { formula: f, label: etichetta };
+    });
+    const dadi = voci.reduce((s, v) => s + v.formula.dadiFisici, 0);
+    if (dadi > MASSIMO_DADI_FISICI) throw new ErroreHttp(400, `${dadi} dice in one throw: at most ${MASSIMO_DADI_FISICI}`);
+    return voci;
+  }
+
+  /** Il ponte tira le formule in un lancio solo, con la fisica del tavolo. */
+  private async lancia(voci: readonly { formula: Formula }[]): Promise<LancioDelMaster> {
+    let lancio: LancioDelMaster;
+    try {
+      lancio = await this.mano.tira(voci.map((v) => v.formula));
+    } catch (e) {
+      throw new ErroreHttp(503, e instanceof Error ? e.message : String(e));
+    }
+    // Il primo lancio aspetta il motore della fisica: se nel frattempo il ponte si è fermato, niente registro.
+    if (this.spento) throw new ErroreHttp(503, 'the bridge is stopping');
+    return lancio;
+  }
+
+  /**
+   * Il DM tira i suoi dadi: una o più formule in un lancio solo. Il ponte lo tira da sé e lo scrive nel
+   * registro; in chiaro, i tavoli collegati ne ricevono la ripresa e la risposta parte quando l'hanno
+   * vista fino in fondo. Un tiro segreto arriva ai tavoli coperto, e nel log del ponte senza numeri.
+   */
+  private async tiraIlMaster(corpo: Record<string, unknown>, res: ServerResponse): Promise<void> {
+    if (corpo.segreto !== undefined && typeof corpo.segreto !== 'boolean') throw new ErroreHttp(400, 'segreto must be true or false');
+    const segreto = corpo.segreto === true;
+    const voci = this.vociDelLancio(corpo, 'who rolls what');
+    const lancio = await this.lancia(voci);
+    const visto = !segreto && this.tavoli.size > 0;
+    const at = new Date().toISOString();
+    const throwId = randomUUID();
+    const tiri = voci.map((v, i) =>
+      this.registro.registraTiroDelMaster(
+        tiroDelMaster({ id: randomUUID(), at, throwId, secret: segreto, shown: visto, label: v.label, formula: v.formula, conto: lancio.conti[i]! }),
+      ),
+    );
+    for (const t of tiri) this.log(segreto ? `dm roll ${t.seq}: behind the screen` : `dm roll ${t.seq}: ${inRiga(t.summary)}`);
+    for (const ws of this.tavoli) {
+      if (segreto) this.manda(ws, { tipo: 'evento', evento: copri(tiri[0]!) });
+      else this.manda(ws, { tipo: 'lancio del master', tiri, ripresa: lancio.ripresa });
+    }
+    for (const t of tiri) this.accodaFeed(async () => this.mandaAlFeed(t));
+    if (visto) await this.finoAllaFineDellaRipresa(lancio.durata);
+    this.json(res, 200, { tiri, visto } satisfies RispostaTiriDelMaster);
+  }
+
+  /**
+   * Il DM tira al posto di chi gioca, che non può stare al tavolo: il ponte tira i dadi come per il
+   * master, ma i tiri entrano nel registro come tiri liberi di chi gioca, segnati `rolledBy: 'dm'`, e i
+   * tavoli collegati ne mostrano la ripresa coi dadi di chi gioca. Non soddisfano nessuna richiesta
+   * aperta: la risposta dice quali restano sul tavolo.
+   */
+  private async tiraPerChiGioca(corpo: Record<string, unknown>, res: ServerResponse): Promise<void> {
+    if (corpo.segreto !== undefined) throw new ErroreHttp(400, 'a roll made in place of the player is never secret');
+    const voci = this.vociDelLancio(corpo, 'what the character rolls');
+    const lancio = await this.lancia(voci);
+    const visto = this.tavoli.size > 0;
+    const at = new Date().toISOString();
+    const throwId = randomUUID();
+    const tiri = voci.map((v, i) =>
+      this.registro.registraTiro(tiroPerChiGioca({ id: randomUUID(), at, throwId, shown: visto, label: v.label, formula: v.formula, conto: lancio.conti[i]! })),
+    );
+    for (const t of tiri) this.log(`roll ${t.seq}, by the DM for the player: ${inRiga(t.summary)}`);
+    for (const ws of this.tavoli) this.manda(ws, { tipo: 'lancio per chi gioca', tiri, ripresa: lancio.ripresa });
+    for (const t of tiri) this.accodaFeed(async () => this.mandaAlFeed(t));
+    if (visto) await this.finoAllaFineDellaRipresa(lancio.durata);
+    this.json(res, 200, { tiri, visto, richiesteAperte: this.registro.richiesteAperte() } satisfies RispostaTiriPerChiGioca);
+  }
+
+  /** Aspetta che i tavoli abbiano visto la ripresa, in fila dietro quelle mandate prima. */
+  private finoAllaFineDellaRipresa(durata: number): Promise<void> {
+    const ora = Date.now();
+    this.fineRipresa = Math.max(ora, this.fineRipresa) + (durata * 1000 + PAUSA_DOPO_IL_MASTER) * this.ritmoDelleRiprese;
+    const ms = Math.min(this.fineRipresa - ora, ATTESA_DELLA_RIPRESA_MS);
+    return new Promise<void>((ok) => {
+      const pausa = {
+        timer: setTimeout(() => pausa.via(), ms),
+        via: () => {
+          this.pause.delete(pausa);
+          ok();
+        },
+      };
+      this.pause.add(pausa);
+    });
+  }
+
+  /** La cronaca per un tavolo che si collega: i lanci segreti del master coperti, una voce per lancio. */
+  private cronacaPerIlTavolo(): VoceDiCronaca[] {
+    const coperti = new Set<string>();
+    const voci: VoceDiCronaca[] = [];
+    for (const t of this.registro.ultimiTiri(CRONACA_AL_COLLEGAMENTO)) {
+      if (t.type === 'dm.roll.completed' && t.secret) {
+        if (coperti.has(t.throwId)) continue;
+        coperti.add(t.throwId);
+        voci.push(copri(t));
+      } else {
+        voci.push(t);
+      }
+    }
+    return voci;
+  }
+
   // ---- il tavolo ----
 
   private nuovoTavolo(ws: WebSocket): void {
@@ -381,7 +547,7 @@ export class Ponte {
       tipo: 'stato',
       ultimoSeq: this.registro.ultimoSeq,
       richieste: this.registro.richiesteAperte(),
-      cronaca: this.registro.ultimiTiri(CRONACA_AL_COLLEGAMENTO),
+      cronaca: this.cronacaPerIlTavolo(),
     });
     ws.on('message', (dati, binario) => {
       if (binario) return this.manda(ws, { tipo: 'respinto', id: null, motivo: 'binary message', richiesta: null });
@@ -458,8 +624,8 @@ export class Ponte {
     return Promise.all(esiti).then((x) => x.some(Boolean));
   }
 
-  /** Un evento nuovo a tavoli e feed, nell'ordine del registro. */
-  private diffondi(e: Evento): void {
+  /** Una richiesta nuova o annullata a tavoli e feed, nell'ordine del registro. */
+  private diffondi(e: RichiestaCreata | RichiestaAnnullata): void {
     for (const t of this.tavoli) this.manda(t, { tipo: 'evento', evento: e });
     this.accodaFeed(async () => this.mandaAlFeed(e));
   }
@@ -500,7 +666,8 @@ export class Ponte {
 
   private mandaUno(ws: WebSocket, e: Evento): void {
     if (ws.readyState !== ws.OPEN) return;
-    const riga: DalFeed = { evento: e, consegnato: e.type === 'roll.completed' && this.consegnati.has(e.seq) };
+    // Un tiro fatto dal master al posto di chi gioca è già uscito nella risposta alla sua chiamata.
+    const riga: DalFeed = { evento: e, consegnato: e.type === 'roll.completed' && (e.rolledBy === 'dm' || this.consegnati.has(e.seq)) };
     ws.send(JSON.stringify(riga));
   }
 

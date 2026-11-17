@@ -1,7 +1,14 @@
 // L'interfaccia intorno al vassoio: il pannello dei dadi, il campo della formula, i pulsanti,
 // i tasti, la cronaca e il risultato grande. Non lancia niente da sé: chiama le sue azioni.
 
-import { type RichiestaCreata, type TiroCompletato, type TiroDalTavolo } from '../shared/eventi.ts';
+import {
+  type RichiestaCreata,
+  type TiroCompletato,
+  type TiroCoperto,
+  type TiroDalTavolo,
+  type TiroDelMaster,
+  type VoceDiCronaca,
+} from '../shared/eventi.ts';
 import { type Lingua, impostaLingua, lingua, linguaDa, tr } from '../shared/lingua.ts';
 import {
   ErroreFormula,
@@ -15,6 +22,22 @@ import {
   leggiFormula,
 } from '../shared/notazione.ts';
 import { type ProblemaRichiesta } from '../shared/protocollo.ts';
+import { SERIE_DEL_GIOCATORE, type SerieDelGiocatore } from './facce.ts';
+
+/**
+ * L'ora dell'ultimo PULISCI, in millisecondi: da lì la cronaca mostra soltanto i tiri venuti dopo, anche
+ * a pagina ricaricata. Il registro non si tocca: il DM continua a leggerci tutto.
+ */
+const CHIAVE_PULITA = 'dice-sanctum.cronaca-pulita';
+
+function leggiPulitura(): number {
+  try {
+    const n = Number(localStorage.getItem(CHIAVE_PULITA) ?? 0);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  } catch {
+    return 0;
+  }
+}
 
 function elemento<T extends HTMLElement>(id: string): T {
   const e = document.getElementById(id);
@@ -70,6 +93,11 @@ const PROBLEMI: Record<ProblemaRichiesta, Record<Lingua, string>> = {
   annullata: { it: 'richiesta annullata', en: 'request cancelled' },
 };
 
+/** I nomi delle serie di dadi fra cui sceglie chi gioca. */
+const NOME_SERIE: Record<SerieDelGiocatore, () => string> = {
+  perla: () => tr({ it: 'Perla azzurra', en: 'Azure Pearl' }),
+  ossidiana: () => tr({ it: 'Ossidiana e oro', en: 'Obsidian & Gold' }),
+};
 const NATURALE_20 = () => tr({ it: 'NATURALE 20', en: 'NATURAL 20' });
 const NATURALE_1 = () => tr({ it: 'NATURALE 1', en: 'NATURAL 1' });
 
@@ -107,7 +135,7 @@ function icona(lati: Lati): SVGSVGElement {
 const segnoDi = (segno: number, primo: boolean) => (segno < 0 ? (primo ? '-' : ' - ') : primo ? '' : ' + ');
 
 /** I dadi del tiro come nodi: gli scartati attenuati, il d100 con le sue parti nel suggerimento. */
-function dadiDelTiro(e: TiroDalTavolo | TiroCompletato): DocumentFragment {
+function dadiDelTiro(e: TiroDalTavolo | TiroCompletato | TiroDelMaster): DocumentFragment {
   const f = document.createDocumentFragment();
   e.groups.forEach((g, gi) => {
     f.append(segnoDi(g.sign, gi === 0), '[');
@@ -139,6 +167,8 @@ export interface Azioni {
   /** Tira esattamente la formula di una richiesta del DM, con la sua etichetta. */
   lanciaRichiesta(r: RichiestaCreata): Promise<unknown>;
   pulisci(): void;
+  /** Chi gioca cambia la serie dei suoi dadi. */
+  scegliSerie(serie: SerieDelGiocatore): void;
 }
 
 export class Interfaccia {
@@ -156,10 +186,13 @@ export class Interfaccia {
   private readonly azioni: Azioni;
   private inCorso = false;
   private richiesteMostrate: readonly RichiestaCreata[] = [];
+  /** Senza localStorage vale finché la pagina resta aperta. */
+  private pulitaAlle = leggiPulitura();
 
-  constructor(azioni: Azioni) {
+  constructor(azioni: Azioni, serie: SerieDelGiocatore) {
     this.azioni = azioni;
     this.costruisciPannello();
+    this.costruisciSerie(serie);
     const tira = elemento<HTMLButtonElement>('tira');
     const vantaggio = elemento<HTMLButtonElement>('vantaggio');
     const svantaggio = elemento<HTMLButtonElement>('svantaggio');
@@ -168,13 +201,14 @@ export class Interfaccia {
     tira.addEventListener('click', () => this.tiraDalCampo());
     vantaggio.addEventListener('click', () => this.tiraDalCampo('vantaggio'));
     svantaggio.addEventListener('click', () => this.tiraDalCampo('svantaggio'));
-    // Toglie i dadi dal vassoio e la scelta dal campo; la cronaca e il risultato restano.
+    // Sgombra il tavolo: i dadi dal vassoio, la scelta dal campo, il totale dalla targa e la cronaca.
     pulisci.addEventListener('click', () => {
       this.azioni.pulisci();
       this.campo.value = '';
       this.etichetta.value = '';
       this.mostraErrore(null);
       this.aggiornaPannello();
+      this.sgombra();
     });
     this.campo.addEventListener('input', () => {
       this.mostraErrore(null);
@@ -209,6 +243,33 @@ export class Interfaccia {
     });
     for (const b of document.querySelectorAll('button')) b.addEventListener('mousedown', (e) => e.preventDefault());
     this.aggiornaPannello();
+  }
+
+  /** In fondo al pannello dei dadi, la scelta della serie: un pulsante per serie, col suo campione di colore. */
+  private costruisciSerie(scelta: SerieDelGiocatore): void {
+    const gruppo = crea('div', 'serie');
+    gruppo.setAttribute('role', 'radiogroup');
+    const titolo = tr({ it: 'Serie', en: 'Set' });
+    gruppo.setAttribute('aria-label', titolo);
+    gruppo.append(crea('h3', undefined, titolo));
+    const pulsanti = SERIE_DEL_GIOCATORE.map((serie) => {
+      const b = crea('button', 'scelta');
+      b.type = 'button';
+      b.setAttribute('role', 'radio');
+      b.title = NOME_SERIE[serie]();
+      b.append(crea('span', `campione ${serie}`), crea('span', 'nome-serie', NOME_SERIE[serie]()));
+      b.addEventListener('click', () => {
+        segna(serie);
+        this.azioni.scegliSerie(serie);
+      });
+      gruppo.append(b);
+      return { serie, b };
+    });
+    const segna = (quale: SerieDelGiocatore) => {
+      for (const { serie, b } of pulsanti) b.setAttribute('aria-checked', String(serie === quale));
+    };
+    segna(scelta);
+    this.pannello.append(gruppo);
   }
 
   private costruisciPannello(): void {
@@ -293,6 +354,7 @@ export class Interfaccia {
     document.body.classList.add('in-corso');
     this.risultato.hidden = true;
     this.avviso.hidden = true;
+    this.avviso.classList.remove('del-master', 'per-chi-gioca');
     this.avviso.replaceChildren();
   }
 
@@ -307,6 +369,58 @@ export class Interfaccia {
     this.libera();
     this.mostraRisultato(e);
     this.aggiungiCronaca(e, true);
+  }
+
+  /** I dadi del master rotolano: sul vassoio si legge chi tira che cosa, il numero arriva a dadi fermi. */
+  inizioDelMaster(tiri: readonly TiroDelMaster[]): void {
+    this.inizio();
+    this.avviso.hidden = false;
+    this.avviso.classList.remove('grave');
+    this.avviso.classList.add('del-master');
+    const riga = crea('div');
+    riga.append(crea('span', 'chi', tr({ it: 'Il master tira: ', en: 'The DM rolls: ' })), tiri.map((t) => t.label).join(' · '));
+    this.avviso.append(riga);
+  }
+
+  /** I dadi del master sono fermi (o non si potevano mostrare): il risultato e le voci della cronaca. */
+  fineDelMaster(tiri: readonly TiroDelMaster[], visto: boolean): void {
+    if (visto) {
+      this.libera();
+      this.avviso.hidden = true;
+      this.avviso.classList.remove('del-master');
+      this.avviso.replaceChildren();
+      this.mostraRisultatoDelMaster(tiri);
+    }
+    for (const t of tiri) this.aggiungiCronaca(t);
+  }
+
+  /** Il master tira al posto di chi gioca: sul vassoio si legge che cosa, il numero arriva a dadi fermi. */
+  inizioPerChiGioca(tiri: readonly TiroCompletato[]): void {
+    this.inizio();
+    this.avviso.hidden = false;
+    this.avviso.classList.remove('grave');
+    this.avviso.classList.add('per-chi-gioca');
+    const riga = crea('div');
+    riga.append(crea('span', 'chi', tr({ it: 'Il master tira per te: ', en: 'The DM rolls for you: ' })), tiri.map((t) => t.label).join(' · '));
+    this.avviso.append(riga);
+  }
+
+  /** I dadi tirati al posto di chi gioca sono fermi: il totale dove vanno i suoi tiri, e le voci della cronaca. */
+  finePerChiGioca(tiri: readonly TiroCompletato[], visto: boolean): void {
+    if (visto) {
+      this.libera();
+      this.avviso.hidden = true;
+      this.avviso.classList.remove('per-chi-gioca');
+      this.avviso.replaceChildren();
+      if (tiri.length === 1) this.mostraRisultato(tiri[0]!);
+      else this.mostraInFila(tiri, false);
+    }
+    for (const t of tiri) this.aggiungiCronaca(t);
+  }
+
+  /** Il master ha tirato dietro lo schermo: una voce senza numeri. */
+  dietroLoSchermo(t: TiroCoperto): void {
+    this.aggiungiCronaca(t);
   }
 
   fallito(motivo: string): void {
@@ -327,6 +441,7 @@ export class Interfaccia {
   mostraRisultato(e: TiroDalTavolo): void {
     const r = this.risultato;
     r.replaceChildren();
+    r.classList.remove('del-master', 'piu-tiri');
     r.classList.toggle('nat20', e.nat20);
     r.classList.toggle('nat1', e.nat1);
     r.append(crea('div', 'totale', String(e.total)));
@@ -335,13 +450,57 @@ export class Interfaccia {
     r.hidden = false;
   }
 
+  /** Il risultato di un lancio del master: ogni tiro con la sua etichetta e il suo totale. */
+  private mostraRisultatoDelMaster(tiri: readonly TiroDelMaster[]): void {
+    this.mostraInFila(tiri, true);
+  }
+
+  /**
+   * Più tiri di un lancio solo in fila sulla targa, ognuno con l'etichetta sopra il totale: quelli del
+   * master sotto il suo nome, quelli che il master ha tirato al posto di chi gioca senza.
+   */
+  private mostraInFila(tiri: readonly (TiroDelMaster | TiroCompletato)[], delMaster: boolean): void {
+    const r = this.risultato;
+    r.replaceChildren();
+    r.classList.remove('nat20', 'nat1');
+    r.classList.add('piu-tiri');
+    r.classList.toggle('del-master', delMaster);
+    if (delMaster) r.append(crea('div', 'chi', tr({ it: 'Il master', en: 'The DM' })));
+    const righe = crea('div', tiri.length === 1 ? 'tiri uno' : tiri.length > 4 ? 'tiri molti' : 'tiri');
+    for (const t of tiri) {
+      const tiro = crea('div', 'tiro');
+      if (t.nat20) tiro.classList.add('nat20');
+      if (t.nat1) tiro.classList.add('nat1');
+      tiro.append(crea('span', 'etichetta', t.label), crea('span', 'totale', String(t.total)));
+      if (t.nat20) tiro.append(crea('span', 'naturale', NATURALE_20()));
+      if (t.nat1) tiro.append(crea('span', 'naturale', NATURALE_1()));
+      righe.append(tiro);
+    }
+    r.append(righe);
+    r.hidden = false;
+  }
+
+  /** La voce di un lancio del master dietro lo schermo. */
+  private voceCoperta(e: TiroCoperto): HTMLLIElement {
+    const li = crea('li', 'voce del-master coperta');
+    li.dataset.id = e.id;
+    const testa = crea('div', 'testa');
+    testa.append(crea('time', undefined, ora(e.at)), crea('span', 'etichetta', tr({ it: 'Il master tira dietro lo schermo', en: 'The DM rolls behind the screen' })));
+    li.append(testa);
+    return li;
+  }
+
   /** Una voce della cronaca. `inCoda`: il tiro non è ancora nel registro. */
-  private voce(e: TiroDalTavolo | TiroCompletato, inCoda: boolean, nota?: string): HTMLLIElement {
+  private voce(e: TiroDalTavolo | VoceDiCronaca, inCoda: boolean, nota?: string): HTMLLIElement {
+    if (e.type === 'dm.roll.hidden') return this.voceCoperta(e);
+    const delMaster = e.type === 'dm.roll.completed';
+    const chiesto = e.type === 'roll.completed' && e.requestId !== null;
     const li = crea('li', 'voce');
     li.dataset.id = e.id;
     if (e.nat20) li.classList.add('nat20');
     if (e.nat1) li.classList.add('nat1');
-    if (e.requestId) li.classList.add('dal-dm');
+    if (chiesto) li.classList.add('dal-dm');
+    if (delMaster) li.classList.add('del-master');
     if (inCoda) li.classList.add('in-coda');
     const testa = crea('div', 'testa');
     testa.append(crea('time', undefined, ora(e.at)));
@@ -353,7 +512,9 @@ export class Interfaccia {
     const note: string[] = [];
     if (e.nat20) note.push(NATURALE_20());
     if (e.nat1) note.push(NATURALE_1());
-    if (e.requestId) note.push(tr({ it: 'chiesto dal DM', en: 'asked by the DM' }));
+    if (chiesto) note.push(tr({ it: 'chiesto dal DM', en: 'asked by the DM' }));
+    if (delMaster) note.push(tr({ it: 'tiro del master', en: 'rolled by the DM' }));
+    if (e.type === 'roll.completed' && e.rolledBy === 'dm') note.push(tr({ it: 'tirato dal master per te', en: 'rolled by the DM for you' }));
     if (note.length) li.append(crea('div', 'note', note.join(' · ')));
     if (nota) li.append(crea('div', 'nota-ponte', nota));
     // Si vede soltanto da scollegati: da collegati un tiro resta in coda pochi millisecondi.
@@ -362,7 +523,7 @@ export class Interfaccia {
   }
 
   /** Una voce in cima alla cronaca. */
-  aggiungiCronaca(e: TiroDalTavolo | TiroCompletato, inCoda = false): void {
+  aggiungiCronaca(e: TiroDalTavolo | VoceDiCronaca, inCoda = false): void {
     this.voci.querySelector(`li[data-id="${CSS.escape(e.id)}"]`)?.remove();
     this.voci.prepend(this.voce(e, inCoda));
     while (this.voci.children.length > 300) this.voci.lastElementChild?.remove();
@@ -420,11 +581,30 @@ export class Interfaccia {
     return this.richiesteMostrate;
   }
 
-  /** La cronaca dal registro, più i tiri ancora in coda; sopravvive ai riavvii. */
-  cronaca(registrati: readonly TiroCompletato[], inCoda: readonly TiroDalTavolo[]): void {
+  /** La cronaca dal registro dall'ultimo PULISCI in poi, più i tiri ancora in coda; sopravvive ai riavvii. */
+  cronaca(registrati: readonly VoceDiCronaca[], inCoda: readonly TiroDalTavolo[]): void {
     const visti = new Set(registrati.map((t) => t.id));
-    const voci = [...registrati.map((t) => this.voce(t, false)), ...inCoda.filter((t) => !visti.has(t.id)).map((t) => this.voce(t, true))];
+    const dopo = registrati.filter((t) => Date.parse(t.at) > this.pulitaAlle);
+    const voci = [...dopo.map((t) => this.voce(t, false)), ...inCoda.filter((t) => !visti.has(t.id)).map((t) => this.voce(t, true))];
     this.voci.replaceChildren(...voci.reverse().slice(0, 300));
+  }
+
+  /**
+   * PULISCI: via il totale dalla targa, gli avvisi e le voci della cronaca già nel registro, e la pagina
+   * ricorda l'ora. Restano i tiri ancora in coda, che il DM non ha ancora ricevuto.
+   */
+  private sgombra(): void {
+    this.risultato.hidden = true;
+    this.avviso.hidden = true;
+    this.avviso.classList.remove('grave', 'del-master', 'per-chi-gioca');
+    this.avviso.replaceChildren();
+    for (const li of [...this.voci.querySelectorAll('li:not(.in-coda)')]) li.remove();
+    this.pulitaAlle = Date.now();
+    try {
+      localStorage.setItem(CHIAVE_PULITA, String(this.pulitaAlle));
+    } catch {
+      // Senza localStorage la cronaca torna intera alla prossima apertura della pagina.
+    }
   }
 
   registrato(t: TiroCompletato): void {

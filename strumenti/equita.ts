@@ -177,16 +177,18 @@ const VALORI: Record<string, number[]> = {
   d100: Array.from({ length: 100 }, (_, i) => i + 1),
 };
 
-async function principale(): Promise<void> {
-  const fili = Math.min(4, cpus().length);
+/** Una prova con un p sotto la soglia si rifà da capo, su tante volte i lanci. */
+const REPLICA = { soglia: 0.01, volte: 5 } as const;
+
+/** Fa girare i lanci chiesti su `fili` thread, a blocchi, e somma gli esiti per prova. */
+async function conta(lavori: { nome: string; lanci: number }[], fili: number, inizio: number): Promise<Map<string, EsitoBlocco>> {
   const BLOCCO = 500;
   const coda: { nome: string; lanci: number }[] = [];
-  for (const e of ESPERIMENTI) {
+  for (const e of lavori) {
     for (let fatti = 0; fatti < e.lanci; fatti += BLOCCO) coda.push({ nome: e.nome, lanci: Math.min(BLOCCO, e.lanci - fatti) });
   }
   const totaleBlocchi = coda.length;
   const somme = new Map<string, EsitoBlocco>();
-  const inizio = Date.now();
   let fatti = 0;
   await Promise.all(
     Array.from({ length: fili }, async () => {
@@ -220,54 +222,115 @@ async function principale(): Promise<void> {
     }),
   );
   process.stderr.write('\n');
-  const secondi = Math.round((Date.now() - inizio) / 1000);
-  scriviRapporto(somme, secondi, fili);
+  return somme;
 }
 
-function scriviRapporto(somme: Map<string, EsitoBlocco>, secondi: number, fili: number): void {
+interface Riga {
+  categoria: string;
+  osservati: number[];
+  attesi: number[];
+  chi: number;
+  gdl: number;
+  p: number;
+  scartoMassimo: number;
+}
+
+/** Il chi quadro di ogni categoria di dadi contata in una prova. */
+function righeDi(e: Esperimento, s: EsitoBlocco): Riga[] {
+  const righe: Riga[] = [];
+  for (const [categoria, valori] of Object.entries(s.conteggi).sort()) {
+    const attesi = VALORI[categoria];
+    if (!attesi) continue;
+    const fuori = Object.keys(valori).filter((v) => !attesi.includes(Number(v)));
+    if (fuori.length) throw new Error(`${e.nome} ${categoria}: valori impossibili ${fuori.join(', ')}`);
+    const osservati = attesi.map((v) => valori[v] ?? 0);
+    righe.push({ categoria, osservati, attesi, ...chiQuadro(osservati) });
+  }
+  return righe;
+}
+
+async function principale(): Promise<void> {
+  const fili = Math.min(4, cpus().length);
+  const inizio = Date.now();
+  const somme = await conta(ESPERIMENTI, fili, inizio);
+  const sospette = ESPERIMENTI.filter((e) => {
+    const s = somme.get(e.nome);
+    return s !== undefined && righeDi(e, s).some((r) => r.p < REPLICA.soglia);
+  });
+  const repliche =
+    sospette.length > 0
+      ? await conta(
+          sospette.map((e) => ({ nome: e.nome, lanci: e.lanci * REPLICA.volte })),
+          fili,
+          inizio,
+        )
+      : new Map<string, EsitoBlocco>();
+  const secondi = Math.round((Date.now() - inizio) / 1000);
+  scriviRapporto(somme, repliche, secondi, fili);
+}
+
+function scriviRapporto(somme: Map<string, EsitoBlocco>, repliche: Map<string, EsitoBlocco>, secondi: number, fili: number): void {
   const righe: string[] = [];
   const data = new Date().toISOString().slice(0, 10);
   righe.push('# Equità dei dadi', '');
   righe.push(
     `Misurata il ${data} con \`strumenti/equita.ts\`: lanci simulati con la stessa fisica del tavolo (Rapier, \`src/physics\`), la stessa fonte del caso (\`crypto.getRandomValues\`) e la stessa lettura delle facce. ${fili} thread, ${secondi} secondi.`,
     '',
-    `Parametri: gravità ${FISICA.gravita} cm/s², passo 1/${Math.round(1 / FISICA.passo)} s, vassoio ${FISICA.vassoio.larghezza}×${FISICA.vassoio.profondita} cm, tolleranza dello storto ${FISICA.tolleranzaStorto}°.`,
+    `Parametri: gravità ${FISICA.gravita} cm/s², passo 1/${Math.round(1 / FISICA.passo)} s, vassoio ${FISICA.vassoio.larghezza}×${FISICA.vassoio.profondita} cm con la torre sul lato di fondo (${FISICA.torre.scivoli.length} scivoli), tolleranza dello storto ${FISICA.tolleranzaStorto}°.`,
     '',
-    'Come si legge: per ogni dado si contano le facce uscite e si confrontano con la distribuzione uniforme col chi quadro. Il valore p è la probabilità di vedere uno scarto almeno così grande con un dado perfettamente equo. Su una trentina di prove qualche p sotto 0,05 capita per caso (una su venti); un bias vero si riconosce perché resta sotto 0,001 anche rifacendo la prova con lanci nuovi. «Scarto massimo» è la faccia più lontana dall’atteso, in percentuale dell’atteso.',
+    `Come si legge: per ogni dado si contano le facce uscite e si confrontano con la distribuzione uniforme col chi quadro. Il valore p è la probabilità di vedere uno scarto almeno così grande con un dado perfettamente equo. Su una ventina di prove qualche p sotto 0,05 capita per caso (una su venti). Per questo ogni prova con un p sotto ${String(REPLICA.soglia).replace('.', ',')} si rifà da sola, da capo, su ${REPLICA.volte} volte i lanci: un bias vero torna, più netto; uno scarto del caso sparisce. «Scarto massimo» è la faccia più lontana dall’atteso, in percentuale dell’atteso.`,
     '',
-    'Perché ci si aspetta l’equità prima ancora di contare: l’orientamento di partenza è uniforme su tutte le rotazioni, posizione, velocità e rotazione non dipendono da come il dado è girato, e il collisore del dado ha simmetrie che portano ogni faccia su ogni altra (il d12, composto da un cubo e sei tetti, ha le dodici rotazioni del tetraedro). Ogni simmetria scambia le facce lasciando identica la probabilità del lancio. Le prove controllano che il codice faccia davvero questo.',
+    'Perché l’equità è esatta prima ancora di contare: a ogni lancio i numeri si legano al solido della fisica con una sua rotazione di simmetria tirata a sorte (12 per il d4, 24 per d6 e d8, 10 per il d10, 60 per d12 e d20), e quelle rotazioni portano ogni faccia su ogni altra lo stesso numero di volte. Qualunque faccia il motore favorisca, porta un numero a caso: ogni numero esce con la stessa probabilità, comunque si comporti la fisica. In più l’orientamento di partenza è uniforme su tutte le rotazioni, e posizione, velocità e rotazione non dipendono da come il dado è girato. Le prove controllano che il codice faccia davvero questo.',
     '',
-    'Un bias trovato e tolto: nella prima misura, il 14 novembre 2026, il d12 è uscito con p sotto 0,001 in due prove separate, con le stesse facce sbilanciate (1 e 8 sopra l’atteso, 5 e 7 sotto, fino al 6%). La causa: Rapier costruisce il contatto di una faccia con al più quattro vertici, e sui pentagoni del d12 ne restava fuori uno, sempre lo stesso per faccia; il dado si ribaltava più facilmente da quel lato. Contro un fondo a scatola, poi, un punto in più ne faceva scartare uno anche su tre facce del d10. Adesso il d12 è un cubo con un tetto su ogni faccia (la costruzione di Euclide), fondo e sponde sono piani, e `test/fisica.test.ts` controlla che ogni faccia di ogni dado appoggi su tutti i suoi vertici. I numeri qui sotto sono quelli dopo la correzione.',
+    'Un bias trovato e tolto: nella prima misura, il 14 novembre 2026, il d12 è uscito con p sotto 0,001 in due prove separate, con le stesse facce sbilanciate (1 e 8 sopra l’atteso, 5 e 7 sotto, fino al 6%). La causa: Rapier costruisce il contatto di una faccia con al più quattro vertici, e sui pentagoni del d12 ne restava fuori uno, sempre lo stesso per faccia; il dado si ribaltava più facilmente da quel lato. Contro un fondo a scatola, poi, un punto in più ne faceva scartare uno anche su tre facce del d10. Adesso il d12 è un cubo con un tetto su ogni faccia (la costruzione di Euclide), fondo e sponde sono piani, e `test/fisica.test.ts` controlla che ogni faccia di ogni dado appoggi su tutti i suoi vertici.',
+    '',
+    'Un secondo scarto, più piccolo, trovato il 17 novembre 2026 contando 100.000 lanci del solo d12: facce lontane dall’atteso fino al 3% nel vassoio senza torre (p 0,0004) e fino al 4,5% con la torre (p 0,0001), invisibili su 20.000 lanci. La causa è numerica: il solutore tratta pezzi e vertici del collisore in un ordine fisso, e le simmetrie del solido non valgono più alla lettera. La cura è il giro a sorte descritto sopra, che vale per ogni dado. I numeri qui sotto sono quelli dopo le due correzioni.',
     '',
   );
-  righe.push('## Sintesi', '', '| prova | categoria | dadi contati | χ² | gradi di libertà | p | scarto massimo | esito |', '|---|---|---:|---:|---:|---:|---:|---|');
+  const intestazione = ['| prova | categoria | dadi contati | χ² | gradi di libertà | p | scarto massimo | esito |', '|---|---|---:|---:|---:|---:|---:|---|'];
+  const riga = (e: Esperimento, r: Riga, esito: string) => {
+    const n = r.osservati.reduce((a, b) => a + b, 0);
+    return `| ${e.nome} | ${r.categoria} | ${n} | ${r.chi.toFixed(1)} | ${r.gdl} | ${r.p.toFixed(3)} | ${(r.scartoMassimo * 100).toFixed(1)}% | ${esito} |`;
+  };
+  const conteggi = (e: Esperimento, r: Riga, dove: string[]) => {
+    const n = r.osservati.reduce((a, b) => a + b, 0);
+    if (r.categoria !== 'd100') {
+      dove.push(`**${e.nome}, ${r.categoria}** (${n} dadi, atteso ${(n / r.attesi.length).toFixed(0)} per faccia)`, '');
+      dove.push(`| ${r.attesi.join(' | ')} |`, `|${r.attesi.map(() => '---:').join('|')}|`, `| ${r.osservati.join(' | ')} |`, '');
+    } else {
+      const dec = Array.from({ length: 10 }, (_, d) => r.osservati.slice(d * 10, d * 10 + 10));
+      dove.push(`**${e.nome}, d100 intero** (${n} tiri, atteso ${(n / 100).toFixed(0)} per valore; righe da 1-10 a 91-100)`, '');
+      dove.push('| da | +0 | +1 | +2 | +3 | +4 | +5 | +6 | +7 | +8 | +9 |', '|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|');
+      dec.forEach((x, d) => dove.push(`| ${d * 10 + 1} | ${x.join(' | ')} |`));
+      dove.push('');
+    }
+  };
+  righe.push('## Sintesi', '', ...intestazione);
   const dettagli: string[] = [];
   let peggiore = 1;
   for (const e of ESPERIMENTI) {
     const s = somme.get(e.nome);
     if (!s) continue;
-    for (const [cat, valori] of Object.entries(s.conteggi).sort()) {
-      const attesi = VALORI[cat];
-      if (!attesi) continue;
-      const osservati = attesi.map((v) => valori[v] ?? 0);
-      const fuori = Object.keys(valori).filter((v) => !attesi.includes(Number(v)));
-      if (fuori.length) throw new Error(`${e.nome} ${cat}: valori impossibili ${fuori.join(', ')}`);
-      const n = osservati.reduce((a, b) => a + b, 0);
-      const { chi, gdl, p, scartoMassimo } = chiQuadro(osservati);
-      peggiore = Math.min(peggiore, p);
-      const esito = p < 0.001 ? '**da rifare: possibile bias**' : p < 0.01 ? 'da tenere d’occhio' : 'nessun segno di bias';
-      righe.push(`| ${e.nome} | ${cat} | ${n} | ${chi.toFixed(1)} | ${gdl} | ${p.toFixed(3)} | ${(scartoMassimo * 100).toFixed(1)}% | ${esito} |`);
-      if (cat !== 'd100') {
-        dettagli.push(`**${e.nome}, ${cat}** (${n} dadi, atteso ${(n / attesi.length).toFixed(0)} per faccia)`, '');
-        dettagli.push(`| ${attesi.join(' | ')} |`, `|${attesi.map(() => '---:').join('|')}|`, `| ${osservati.join(' | ')} |`, '');
-      } else {
-        const dec = Array.from({ length: 10 }, (_, d) => osservati.slice(d * 10, d * 10 + 10));
-        dettagli.push(`**${e.nome}, d100 intero** (${n} tiri, atteso ${(n / 100).toFixed(0)} per valore; righe da 1-10 a 91-100)`, '');
-        dettagli.push('| da | +0 | +1 | +2 | +3 | +4 | +5 | +6 | +7 | +8 | +9 |', '|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|');
-        dec.forEach((r, d) => dettagli.push(`| ${d * 10 + 1} | ${r.join(' | ')} |`));
-        dettagli.push('');
+    for (const r of righeDi(e, s)) {
+      peggiore = Math.min(peggiore, r.p);
+      righe.push(riga(e, r, r.p < REPLICA.soglia ? 'sotto soglia: rifatta, vedi le repliche' : 'nessun segno di bias'));
+      conteggi(e, r, dettagli);
+    }
+  }
+  const dettagliRepliche: string[] = [];
+  if (repliche.size > 0) {
+    let confermate = 0;
+    righe.push('', '## Repliche', '', `Le prove uscite sotto soglia, rifatte da capo su ${REPLICA.volte} volte i lanci.`, '', ...intestazione);
+    for (const e of ESPERIMENTI) {
+      const s = repliche.get(e.nome);
+      if (!s) continue;
+      for (const r of righeDi(e, s)) {
+        if (r.p < REPLICA.soglia) confermate++;
+        righe.push(riga(e, r, r.p < REPLICA.soglia ? '**bias confermato**' : 'nessun segno di bias: lo scarto era del caso'));
+        conteggi(e, r, dettagliRepliche);
       }
     }
+    righe.push('', confermate > 0 ? `**Scarti confermati dalla replica: ${confermate}.**` : 'Nessuno scarto confermato dalla replica.');
   }
   righe.push('', '## Lanci, ritiri, durata', '', '| prova | lanci | falliti | ritiri per lancio | durata media |', '|---|---:|---:|---:|---:|');
   for (const e of ESPERIMENTI) {
@@ -276,6 +339,7 @@ function scriviRapporto(somme: Map<string, EsitoBlocco>, secondi: number, fili: 
     righe.push(`| ${e.nome} (${e.descrizione}) | ${s.lanci} | ${s.falliti} | ${(s.ritiri / s.lanci).toFixed(3)} | ${(s.tempo / s.lanci).toFixed(2)} s |`);
   }
   righe.push('', `Il p più basso fra tutte le prove: ${peggiore.toFixed(4)}.`, '', '## I conteggi', '', ...dettagli);
+  if (dettagliRepliche.length > 0) righe.push('### Repliche', '', ...dettagliRepliche);
   writeFileSync(new URL('../docs/equita.md', import.meta.url), righe.join('\n') + '\n');
   console.log(righe.slice(0, righe.indexOf('## I conteggi')).join('\n'));
 }

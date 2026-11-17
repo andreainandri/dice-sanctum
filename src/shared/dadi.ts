@@ -48,15 +48,15 @@ export interface Geometria {
 const PHI = (1 + Math.sqrt(5)) / 2;
 const GRADI = Math.PI / 180;
 
-// Misure in centimetri, vicine a quelle di un set comune.
+// Misure in centimetri: un set grande, col d6 da 19 mm (il comune è da 16), un quinto in più su ogni dado.
 export const MISURE = {
-  d4Spigolo: 2.2,
-  d6Spigolo: 1.6,
-  d8Raggio: 1.05,
-  d10Apice: 1.05,
-  d10Anello: 1.0,
-  d12Raggio: 1.15,
-  d20Raggio: 1.2,
+  d4Spigolo: 2.64,
+  d6Spigolo: 1.9,
+  d8Raggio: 1.26,
+  d10Apice: 1.26,
+  d10Anello: 1.2,
+  d12Raggio: 1.38,
+  d20Raggio: 1.44,
 } as const;
 
 /** Facce di un poliedro convesso: ogni piano che lascia tutti i vertici da una parte. */

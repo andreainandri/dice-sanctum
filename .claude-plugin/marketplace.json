@@ -1,0 +1,15 @@
+{
+  "name": "dice-sanctum",
+  "description": "The Dice Sanctum: a 3D dice table for tabletop role-playing with Claude as the game master.",
+  "owner": {
+    "name": "Andrea Inandri",
+    "url": "https://github.com/andreainandri"
+  },
+  "plugins": [
+    {
+      "name": "dice-sanctum",
+      "source": "./",
+      "description": "A 3D dice table with real physics: the player rolls in the browser, the game master asks for rolls and throws its own dice on the same tray."
+    }
+  ]
+}

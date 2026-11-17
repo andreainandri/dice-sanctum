@@ -1,6 +1,6 @@
 {
   "name": "dice-sanctum",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "A 3D dice table with real physics for tabletop role-playing with an AI game master: every roll reaches the DM through a local bridge and an MCP server.",
   "license": "MIT",
@@ -36,6 +36,7 @@
     "@dimforge/rapier3d-compat": "0.21.0",
     "@modelcontextprotocol/sdk": "1.32.2",
     "three": "0.187.0",
+    "vite": "8.3.8",
     "ws": "8.23.0",
     "zod": "4.6.7"
   },
@@ -43,7 +44,6 @@
     "@types/node": "24.19.2",
     "@types/three": "0.187.0",
     "@types/ws": "8.18.2",
-    "typescript": "7.0.2",
-    "vite": "8.3.8"
+    "typescript": "7.0.2"
   }
 }
