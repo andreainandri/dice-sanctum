@@ -1,4 +1,4 @@
-// Il server MCP del Dice Sanctum, su stdio. Sei strumenti per il DM e, nelle sessioni che aprono il
+// Il server MCP del Dice Sanctum, su stdio. Sette strumenti per il DM e, nelle sessioni che aprono il
 // canale, ogni tiro che il DM non ha già ricevuto da una chiamata spinto nella conversazione appena i
 // dadi si fermano. Sottile: stato e registro stanno nel ponte, che si raggiunge via HTTP e WebSocket.
 // I testi sono in inglese: li legge il modello che fa il DM, qualunque lingua parli al tavolo.
@@ -19,6 +19,7 @@ import {
   PORTA_DEL_PONTE,
   type RispostaAnnulla,
   type RispostaAttesa,
+  type RispostaDadiDelMaster,
   type RispostaErrore,
   type RispostaEventi,
   type RispostaRichiesta,
@@ -26,6 +27,7 @@ import {
   type RispostaTiriDelMaster,
   type RispostaTiriPerChiGioca,
 } from '../shared/protocollo.ts';
+import { ASPETTO_DELLA_SERIE, SERIE, SERIE_DEL_MASTER_DI_PARTENZA, eSerie } from '../shared/serie.ts';
 
 const PONTE = (process.env.DICE_SANCTUM_URL ?? `http://127.0.0.1:${PORTA_DEL_PONTE}`).replace(/\/+$/, '');
 const AVVIO = new Date().toISOString();
@@ -39,6 +41,7 @@ const ISTRUZIONI = `Dice Sanctum: the 3D dice table where ${GIOCATORE} rolls the
 - The rolls of ${GIOCATORE} reach the conversation by themselves as <channel source="dice-sanctum" ...>, as soon as the dice stop, once each (when the session was started with the Dice Sanctum channel). Without the channel, follow the roll log with the Monitor tool, as the project README explains.
 - For a roll of the character use request_player_roll with wait_seconds (up to ${ATTESA_MASSIMA}): the roll comes back in the same call; if the time runs out, it arrives later through the channel.
 - For the DM's own dice (monsters, companions, hidden checks) use dm_roll. Open rolls land on the table in the DM's dice, where ${GIOCATORE} watches them; with secret: true they stay behind the screen. Put the rolls of one turn in one call (attack and damage together): they land in a single throw. dm_roll never rolls the dice of ${GIOCATORE} and never fulfils a request.
+- The DM's dice are yours to choose with choose_dm_dice: the set that suits you and the story. The set you hold disappears from the sets ${GIOCATORE} can pick, so your dice and theirs never look alike; the choice lasts until you change it.
 - When ${GIOCATORE} cannot be at the table and asks you to roll for them, use roll_for_player: the bridge rolls the character's dice with the same physics, the table shows them in the player's own dice, and the roll log keeps them as rolls of ${GIOCATORE} made by the DM. Use it only on their word (for one roll, or until they say they are back at the table), never on your own initiative, and tell them each result as you would read it off the table.
 - A free roll does not fulfil a request. If ${GIOCATORE} wants to roll a different formula, cancel with cancel_player_roll and ask again.
 - get_rolls(since_seq) recovers what is missing after an interruption; get_status says whether the table is open and which requests are waiting.`;
@@ -100,7 +103,7 @@ function guasto(e: unknown): CallToolResult {
 }
 
 const server = new McpServer(
-  { name: 'dice-sanctum', version: '0.2.0' },
+  { name: 'dice-sanctum', version: '0.3.0' },
   {
     // La chiave dei canali di Claude Code: con questa la sessione ascolta le notifiche del server.
     capabilities: { experimental: { 'claude/channel': {} } },
@@ -200,6 +203,8 @@ server.registerTool(
   async () => {
     try {
       const { dato } = await chiama<RispostaStato>('GET', '/api/stato');
+      // Un ponte di prima della scelta non dice la serie del master: tiene quella di partenza.
+      const dadi = eSerie(dato.dadiDelMaster) ? dato.dadiDelMaster : SERIE_DEL_MASTER_DI_PARTENZA;
       const righe = [
         `Bridge: on at ${PONTE}.`,
         dato.tavoli === 0
@@ -209,6 +214,7 @@ server.registerTool(
         dato.richiesteAperte.length === 0
           ? 'Open requests: none.'
           : `Open requests (oldest first): ${dato.richiesteAperte.map((r) => `${r.requestId} ${r.label}, ${r.formula}, asked at ${ora(r.at)}`).join('; ')}.`,
+        `DM's dice: ${dadi} (${ASPETTO_DELLA_SERIE[dadi]}).`,
       ];
       return testo(righe.join('\n'));
     } catch (e) {
@@ -420,6 +426,28 @@ server.registerTool(
           ? ''
           : `\nStill open on the table, not fulfilled by this throw: ${dato.richiesteAperte.map((r) => `${r.requestId} (${r.label}, ${r.formula})`).join('; ')}. Cancel what this throw replaced.`;
       return testo(`Rolled in place of ${GIOCATORE} (${dove}):\n${righe.join('\n')}${aperte}`);
+    } catch (e) {
+      return guasto(e);
+    }
+  },
+);
+
+server.registerTool(
+  'choose_dm_dice',
+  {
+    title: "Choose the DM's dice",
+    description: `Chooses the dice set of the DM: the dice in which open dm_roll throws land on the table of ${GIOCATORE}. The set is the DM's alone: it disappears from the sets ${GIOCATORE} can pick, and if they were using it their dice move to another set. The bridge keeps the choice until the DM changes it. Physics and fairness are the same for every set. The sets: ${SERIE.map((s) => `${s} (${ASPETTO_DELLA_SERIE[s]})`).join('; ')}. Before any choice the DM rolls ${SERIE_DEL_MASTER_DI_PARTENZA}.`,
+    inputSchema: {
+      set: z.enum(SERIE).describe('the set the DM rolls with from now on'),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  async ({ set }) => {
+    try {
+      const { codice, dato } = await chiama<RispostaDadiDelMaster & RispostaErrore>('POST', '/api/master/dadi', { serie: set });
+      if (codice !== 200) return errore(dato.errore);
+      const tavoli = dato.tavoli === 0 ? 'no table connected: a table takes it when it opens' : `the ${dato.tavoli === 1 ? 'table has' : `${dato.tavoli} tables have`} taken it already`;
+      return testo(`The DM's dice are now ${dato.serie}: ${ASPETTO_DELLA_SERIE[dato.serie]} (${tavoli}). ${GIOCATORE_IN_TESTA} can no longer pick this set.`);
     } catch (e) {
       return guasto(e);
     }

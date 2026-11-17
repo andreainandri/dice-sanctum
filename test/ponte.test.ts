@@ -284,7 +284,7 @@ describe('il ponte: registro, tavolo e richieste', () => {
 
   it('due tiri di fila: seq in ordine, righe compatte col seq dopo la v', async () => {
     tavolo = await TavoloDiProva.apri(P);
-    assert.deepEqual(tavolo.stato, { tipo: 'stato', ultimoSeq: 0, richieste: [], cronaca: [] });
+    assert.deepEqual(tavolo.stato, { tipo: 'stato', ultimoSeq: 0, richieste: [], cronaca: [], dadiDelMaster: 'sangue' });
     const a = tiro('1d20+5', [[17]], { label: 'Percezione' });
     const b = tiro('2d6', [[3, 4]]);
     const ra = await tavolo.tira(a);

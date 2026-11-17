@@ -1,7 +1,7 @@
 // Le prove d'integrazione del server MCP vero, lanciato come lo lancia Claude Code, col client
-// dell'SDK al posto della sessione del DM: i sei strumenti, il canale (ogni tiro una volta sola),
-// le attese, gli annullamenti, i dadi del master, i tiri fatti al posto di chi gioca, il ponte spento
-// e riavviato a metà.
+// dell'SDK al posto della sessione del DM: i sette strumenti, il canale (ogni tiro una volta sola),
+// le attese, gli annullamenti, i dadi del master e la loro serie, i tiri fatti al posto di chi gioca, il
+// ponte spento e riavviato a metà.
 
 import assert from 'node:assert/strict';
 import { createServer } from 'node:net';
@@ -45,9 +45,15 @@ describe('il server MCP col ponte spento', () => {
     await mcp.chiudi();
   });
 
-  it('elenca i sei strumenti, con l’attesa fino a 110 secondi e fino a otto tiri per lancio', async () => {
+  it('elenca i sette strumenti, con l’attesa fino a 110 secondi e fino a otto tiri per lancio', async () => {
     const { tools } = await mcp.client.listTools();
-    assert.deepEqual(tools.map((t) => t.name).sort(), ['cancel_player_roll', 'dm_roll', 'get_rolls', 'get_status', 'request_player_roll', 'roll_for_player']);
+    assert.deepEqual(tools.map((t) => t.name).sort(), ['cancel_player_roll', 'choose_dm_dice', 'dm_roll', 'get_rolls', 'get_status', 'request_player_roll', 'roll_for_player']);
+    // La serie del master si sceglie soltanto fra quelle che ci sono, e lo strumento le descrive tutte.
+    const dadi = tools.find((t) => t.name === 'choose_dm_dice')!;
+    assert.deepEqual(dadi.inputSchema.required, ['set']);
+    assert.deepEqual((dadi.inputSchema.properties as Record<string, { enum?: string[] }>).set?.enum, ['perla', 'ossidiana', 'zaffiro', 'malachite', 'avorio', 'grafite', 'bufera', 'carnevale', 'sangue']);
+    assert.match(dadi.description ?? '', /bufera \(blizzard: smoky dark blue swirled with silver, white numbers\)/);
+    assert.match(dadi.description ?? '', /Before any choice the DM rolls sangue\./);
     for (const nome of ['dm_roll', 'roll_for_player']) {
       const lancio = tools.find((t) => t.name === nome)!;
       assert.deepEqual(lancio.inputSchema.required, ['rolls'], nome);
@@ -156,7 +162,10 @@ describe('il server MCP col ponte acceso', () => {
 
   it('senza tavolo: lo stato lo dice e la richiesta è un errore', async () => {
     const s = await mcp.chiama('get_status');
-    assert.equal(s.testo, `Bridge: on at http://127.0.0.1:${P}.\nTables connected: none (no browser has the Dice Sanctum open).\nLast seq: 1.\nOpen requests: none.`);
+    assert.equal(
+      s.testo,
+      `Bridge: on at http://127.0.0.1:${P}.\nTables connected: none (no browser has the Dice Sanctum open).\nLast seq: 1.\nOpen requests: none.\nDM's dice: sangue (oxblood: dark red marble with near-black veins, gold numbers).`,
+    );
     const r = await mcp.chiama('request_player_roll', { formula: '1d20+3', label: 'Salvezza su Costituzione', wait_seconds: 5 });
     assert.equal(r.errore, true);
     assert.match(r.testo, /no table connected/);
@@ -416,6 +425,22 @@ describe('il master tira dal server MCP', () => {
     await dormi(300);
     // Dal canale è uscito soltanto il tiro del tavolo: i tiri del master tornano nella loro chiamata.
     assert.deepEqual(mcp.canale.map((x) => Number(x.meta.seq)), [seq]);
+  });
+
+  it('il master sceglie i suoi dadi: il tavolo li prende subito, lo stato li dice, un nome sconosciuto no', async () => {
+    tavolo ??= await TavoloDiProva.apri(P);
+    const arriva = tavolo.aspetta<Extract<DalPonte, { tipo: 'dadi del master' }>>((m) => m.tipo === 'dadi del master');
+    const r = await mcp.chiama('choose_dm_dice', { set: 'carnevale' });
+    assert.equal(r.errore, false, r.testo);
+    assert.equal(
+      r.testo,
+      "The DM's dice are now carnevale: carnival: translucent pumpkin orange with glitter, black numbers (the table has taken it already). Ada can no longer pick this set.",
+    );
+    assert.equal((await arriva).serie, 'carnevale');
+    assert.match((await mcp.chiama('get_status')).testo, /^DM's dice: carnevale \(carnival: /m);
+    const no = await mcp.chiama('choose_dm_dice', { set: 'drago' });
+    assert.equal(no.errore, true);
+    assert.match((await mcp.chiama('get_status')).testo, /^DM's dice: carnevale /m);
   });
 
   it('get_rolls li mostra, e dice dove sono caduti', async () => {

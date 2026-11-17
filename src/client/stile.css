@@ -408,6 +408,79 @@ main {
   background: radial-gradient(circle at 35% 30%, #4a474f, #0d0c0f 55%);
 }
 
+.serie .campione.zaffiro {
+  border-color: #1a2766;
+  background: radial-gradient(circle at 50% 50%, #1f4fd0 0 22%, transparent 26%), radial-gradient(circle at 35% 30%, #f2f4f7, #c6cbd2 45%, #8b929b);
+}
+
+.serie .campione.malachite {
+  border-color: #d9b45a;
+  background: repeating-radial-gradient(circle at 25% 80%, #2e8f5c 0 1.5px, #0b3d26 1.5px 3px);
+}
+
+.serie .campione.avorio {
+  border-color: #17120e;
+  background: radial-gradient(circle at 35% 30%, #fbf6e9, #e9dcc0 50%, #c9b48c);
+}
+
+.serie .campione.grafite {
+  border-color: #d9c27e;
+  background: radial-gradient(circle at 35% 30%, #4a4846, #2c2b2a 55%);
+}
+
+.serie .campione.bufera {
+  border-color: #eef3f8;
+  background: radial-gradient(circle at 30% 35%, #c9d8e2 0 8%, transparent 30%), radial-gradient(circle at 70% 70%, #c9d8e2 0 6%, transparent 26%), radial-gradient(circle at 50% 50%, #24434f, #0f1f28 70%);
+}
+
+.serie .campione.carnevale {
+  border-color: #161012;
+  background: radial-gradient(circle at 30% 30%, #fff0c8 0 7%, transparent 9%), radial-gradient(circle at 68% 62%, #fff0c8 0 6%, transparent 8%), radial-gradient(circle at 40% 35%, #ffb866, #f2701a 50%, #c4500a);
+}
+
+.serie .campione.sangue {
+  border-color: #efcf80;
+  background: radial-gradient(circle at 35% 30%, #8a1722, #5c0f17 50%, #35060b);
+}
+
+/* La serie del master non si sceglie: il suo pulsante resta nascosto, anche col display dei pulsanti. */
+.serie .scelta[hidden] {
+  display: none;
+}
+
+/* Il nome della serie scelta accanto al titolo: serve soltanto quando i pulsanti non hanno posto per i nomi. */
+.serie h3 .serie-scelta {
+  display: none;
+}
+
+@media (min-width: 900px) and (max-height: 800px) {
+  /* Con poca altezza le serie diventano una griglia di campioni, e il nome di quella scelta sta nel titolo. */
+  .serie {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .serie h3 {
+    grid-column: 1 / -1;
+  }
+
+  .serie h3 .serie-scelta {
+    display: inline;
+    letter-spacing: 0.08em;
+    text-transform: none;
+    color: var(--ottone-chiaro);
+  }
+
+  .serie .scelta {
+    justify-content: center;
+    padding: 6px 0;
+  }
+
+  .serie .nome-serie {
+    display: none;
+  }
+}
+
 button {
   font: inherit;
   color: var(--testo);

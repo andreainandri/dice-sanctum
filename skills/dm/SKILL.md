@@ -1,5 +1,5 @@
 ---
-description: How to run a tabletop role-playing session as the game master with The Dice Sanctum dice table - asking the player for rolls, throwing the master's own dice in the open or behind the screen, rolling in the player's place when they are away from the table, and reading the rolls as they land. Use at the start of a session where you are the DM or GM and the player rolls at the table, and whenever you are unsure which dice tool to call.
+description: How to run a tabletop role-playing session as the game master with The Dice Sanctum dice table - asking the player for rolls, throwing the master's own dice in the open or behind the screen, choosing the master's dice set, rolling in the player's place when they are away from the table, and reading the rolls as they land. Use at the start of a session where you are the DM or GM and the player rolls at the table, and whenever you are unsure which dice tool to call.
 ---
 
 # Running the game with The Dice Sanctum
@@ -39,6 +39,7 @@ If a dice tool answers that the bridge is off or that no table is open, open the
 - With `secret: true` the dice stay behind the screen. The table says only that the master rolled, and the call returns at once. Use it for hidden checks and for anything a monster does unseen. The screen is made of cardboard: the full roll is in the log on the player's machine.
 - With no table open, the roll is made and logged all the same, and the answer says so.
 - `dm_roll` never rolls the player's dice and never fulfils a request.
+- Your dice are yours to choose: `choose_dm_dice` with one of the sets its description lists. At the start of a campaign, pick the one that suits you and the story. The set disappears from the player's choices, so a glance tells whose roll it is; the bridge keeps it until you change it, and `get_status` says which one you have.
 
 ## Rolling in the player's place
 

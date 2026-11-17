@@ -16,7 +16,7 @@ Three pieces, all on your machine:
 
 - **the table**: a web page (three.js for the scene, Rapier for the physics) open in a browser window;
 - **the bridge**: a Node process on `127.0.0.1:4777` that serves the page, talks to the table, writes the roll log and answers the MCP server;
-- **the MCP server** `dice-sanctum`: six tools for the DM, and a channel that pushes your rolls into the session.
+- **the MCP server** `dice-sanctum`: seven tools for the DM, and a channel that pushes your rolls into the session.
 
 Every result comes from the physics: the dice drop into the tower with a random spin and speed, tumble from one chute to the next, roll out of the arch into the court, and the value is read from the face that ends up on top. The bridge checks every roll it receives (formula, dice values, kept dice, total) before it writes it down.
 
@@ -101,15 +101,15 @@ tail -n0 -F ~/.local/share/dice-sanctum/tiri.jsonl | grep --line-buffered '"type
 - **The result** on the tower's plaque, in gold numerals: a natural 20 brighter, with the die lighting up for a moment, and a natural 1 in red.
 - **The chronicle** on the right: time, label, formula, dice (the discarded ones dimmed), total, and "asked by the DM" on the rolls of a request. It refills from the roll log every time the page opens, from the last CLEAR on.
 - **The DM's notice** at the top: "The DM asks: **Constitution saving throw**, 1d20+3" with its own ROLL button, which rolls exactly that formula with that label. With several requests, the oldest sits on top.
-- **The DM's dice**: when the DM rolls in the open, its dice, marbled oxblood with gold numbers, come out of the same tower and roll on your tray, with a line that says who is rolling what. When they stop, every roll shows on the plaque with its label and its total, and enters the chronicle marked "rolled by the DM". Your own roll is never interrupted: the DM's throw waits for your dice to stop and leaves you the time to read them. When the DM rolls behind the screen, you hear the dice, muffled, and the chronicle says only that it rolled, with no label, dice or total.
-- **The dice sets**, at the bottom of the panel: Azure Pearl (clouded blue resin, silver numbers) and Obsidian & Gold. The choice stays from one visit to the next. The DM has one set and it cannot be picked: a glance tells whose roll it is.
-- **Sound**: you hear every hit of the dice, different on velvet, on wood and die against die, and boxed-in while the dice are inside the tower. The button at the top right turns it off and on, and the choice stays. A browser lets a page play sound only after the first click or key press.
+- **The DM's dice**: when the DM rolls in the open, its dice (to begin with, marbled oxblood with gold numbers) come out of the same tower and roll on your tray, with a line that says who is rolling what. When they stop, every roll shows on the plaque with its label and its total, and enters the chronicle marked "rolled by the DM". Your own roll is never interrupted: the DM's throw waits for your dice to stop and leaves you the time to read them. When the DM rolls behind the screen, you hear the dice, muffled, and the chronicle says only that it rolled, with no label, dice or total.
+- **The dice sets**, at the bottom of the panel, are nine: Azure Pearl (clouded blue resin, silver numbers), Obsidian & Gold, Sapphire (bead-blasted aluminium with navy numbers, and a gem in place of the 20), Malachite (green stone in bands, gold numbers), Ivory (old bone, black numbers), Graphite & Gold (matte charcoal, pale gold numbers), Blizzard (smoky blue swirled with silver, white numbers), Carnival (pumpkin orange with glitter, black numbers) and Oxblood. The DM holds one, which it picks with `choose_dm_dice`: that set disappears from your choices, and a glance tells whose roll it is. Your choice stays from one visit to the next; if the DM takes the very set you have, your dice move to the next one. Physics and fairness are the same for all of them.
+- **Sound**: you hear every hit of the dice, different on velvet, on wood and die against die, and boxed-in while the dice are inside the tower. You hear the material too: the Sapphire's aluminium clinks, the Malachite's stone knocks dry. The button at the top right turns it off and on, and the choice stays. A browser lets a page play sound only after the first click or key press.
 - **The connection status** at the top right. Rolls made while disconnected wait in a queue, kept in the browser's storage so they survive closing the window, and leave on their own as soon as the bridge answers, each one once.
 - **Rolls the DM makes for you**, when you have told it you cannot be at the table: your own dice come out of the tower with a line that says "The DM rolls for you", the total goes on the plaque as for your own rolls, and the chronicle marks them "rolled by the DM for you".
 
 ![A throw the DM made in the player's place: two azure pearl dice on the velvet, the attack and the damage side by side on the plaque, and in the chronicle both rolls marked "rolled by the DM for you", above the DM's own wolf bite](docs/for-you.jpg)
 
-The page speaks English or Italian, following the browser's language; `?lingua=en` or `?lingua=it` in the address picks one. It adapts to the window: below 900 pixels of width the dice and the choice of set move to a strip under the tray and the chronicle opens from a button; in tall, narrow windows the tower shows whole.
+The page speaks English or Italian, following the browser's language; `?lingua=en` or `?lingua=it` in the address picks one. It adapts to the window: below 900 pixels of width the dice and the choice of set move to a strip under the tray and the chronicle opens from a button; in short windows the sets become a grid of swatches, with the name of the chosen one in the heading; in tall, narrow windows the tower shows whole.
 
 ### Dice notation
 
@@ -134,6 +134,7 @@ The same guidance, in short, is in the MCP server's instructions, which Claude C
 | `cancel_player_roll` | `requestId` | cancelled; if it was already rolled, the roll |
 | `dm_roll` | `rolls` (1 to 8, each with `formula` and `label`), `secret?` | every roll with its seq, and where the throw landed: on the table, behind the screen, or with no table connected |
 | `roll_for_player` | `rolls` (1 to 8, each with `formula` and `label`) | every roll with its seq, whether a table showed the throw, and the requests still open |
+| `choose_dm_dice` | `set` (one of the nine sets) | the DM's set, and whether the connected tables have taken it |
 
 - **A roll of the character** (an attack, damage, a saving throw, a check the player sees): `request_player_roll` with `wait_seconds` up to 110. The call returns the roll: "Ada rolled r-0007: Constitution saving throw 1d20+3: [14] +3 = 17 (seq 42)." While it waits, the session is busy on that call, and what the player types in the chat stays queued until the call returns. To ask for a roll and keep narrating, use `wait_seconds` 0.
 - **When the time runs out** before the roll, the answer is "Waiting: …". The request stays on the table, and the roll arrives through the channel when it lands.
@@ -141,6 +142,7 @@ The same guidance, in short, is in the MCP server's instructions, which Claude C
 - **A free roll never fulfils a request**, even with the same formula. When the player wants to roll something else, the DM cancels with `cancel_player_roll` and asks again.
 - **The DM's own dice** (monsters, companions, hidden checks): `dm_roll`. The rolls of one turn go in one call, attack and damage together: they land in a single throw of at most 30 dice, and each has its own line in the answer. In the open, the call returns when the dice have stopped on the player's table, a second or two later; with `secret: true`, or with no table open, it returns at once and says so.
 - **`dm_roll` never rolls the player's dice and never fulfils a request.** The DM's rolls come back in their own call and stay out of the channel; `get_rolls` lists them with everything else.
+- **The DM picks its own dice**: `choose_dm_dice`, with one of the nine sets (the tool's description says what each looks like). The bridge keeps the choice in `dadi-del-master.json`, next to the roll log, and sends it to the tables; `get_status` says which set the DM has.
 - **When the player cannot be at the table** and tells the DM to roll for them: `roll_for_player`. The bridge throws the character's dice with the same physics, and each roll enters the log as a roll of the player with `"rolledBy":"dm"`. A connected table plays the throw back with the player's own dice, puts the total on the plaque where their rolls go, and marks the roll in the chronicle as rolled by the DM for them; with no table open the roll is made and logged all the same. These rolls come back in their own call and stay out of the channel, and they fulfil no request: an open one stays on the table until the DM cancels it. The DM uses this tool only on the player's word, for one roll or until the player is back.
 - **Back at a table that was hidden meanwhile**, the player finds the last throw lying on the velvet with its total, and the rest in the chronicle: a throw that has waited more than 15 seconds to be shown is not played back.
 - **After an interruption**, `get_rolls(since_seq)` returns everything that entered the roll log in the meantime.
@@ -202,7 +204,7 @@ Two biases were found and removed on the way. The first: Rapier builds the conta
 ## Development
 
 ```sh
-npm test            # 199 tests: notation, geometry, physics, recording, hits, events, bridge, DM dice, MCP server, plugin
+npm test            # 219 tests: notation, geometry, physics, recording, hits, events, bridge, DM dice and their set, MCP server, plugin
 npm run typecheck
 npm run build       # the page into dist/client
 npm run dev         # the page from source at 127.0.0.1:4778, without the bridge

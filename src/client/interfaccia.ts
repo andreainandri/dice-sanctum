@@ -22,7 +22,7 @@ import {
   leggiFormula,
 } from '../shared/notazione.ts';
 import { type ProblemaRichiesta } from '../shared/protocollo.ts';
-import { SERIE_DEL_GIOCATORE, type SerieDelGiocatore } from './facce.ts';
+import { SERIE, type Serie } from '../shared/serie.ts';
 
 /**
  * L'ora dell'ultimo PULISCI, in millisecondi: da lì la cronaca mostra soltanto i tiri venuti dopo, anche
@@ -93,10 +93,17 @@ const PROBLEMI: Record<ProblemaRichiesta, Record<Lingua, string>> = {
   annullata: { it: 'richiesta annullata', en: 'request cancelled' },
 };
 
-/** I nomi delle serie di dadi fra cui sceglie chi gioca. */
-const NOME_SERIE: Record<SerieDelGiocatore, () => string> = {
+/** I nomi delle serie di dadi. */
+const NOME_SERIE: Record<Serie, () => string> = {
   perla: () => tr({ it: 'Perla azzurra', en: 'Azure Pearl' }),
   ossidiana: () => tr({ it: 'Ossidiana e oro', en: 'Obsidian & Gold' }),
+  zaffiro: () => tr({ it: 'Zaffiro', en: 'Sapphire' }),
+  malachite: () => tr({ it: 'Malachite', en: 'Malachite' }),
+  avorio: () => tr({ it: 'Avorio', en: 'Ivory' }),
+  grafite: () => tr({ it: 'Grafite e oro', en: 'Graphite & Gold' }),
+  bufera: () => tr({ it: 'Bufera', en: 'Blizzard' }),
+  carnevale: () => tr({ it: 'Carnevale', en: 'Carnival' }),
+  sangue: () => tr({ it: 'Sangue di bue', en: 'Oxblood' }),
 };
 const NATURALE_20 = () => tr({ it: 'NATURALE 20', en: 'NATURAL 20' });
 const NATURALE_1 = () => tr({ it: 'NATURALE 1', en: 'NATURAL 1' });
@@ -168,7 +175,7 @@ export interface Azioni {
   lanciaRichiesta(r: RichiestaCreata): Promise<unknown>;
   pulisci(): void;
   /** Chi gioca cambia la serie dei suoi dadi. */
-  scegliSerie(serie: SerieDelGiocatore): void;
+  scegliSerie(serie: Serie): void;
 }
 
 export class Interfaccia {
@@ -188,11 +195,15 @@ export class Interfaccia {
   private richiesteMostrate: readonly RichiestaCreata[] = [];
   /** Senza localStorage vale finché la pagina resta aperta. */
   private pulitaAlle = leggiPulitura();
+  /** I pulsanti della scelta della serie, uno per serie: quello della serie del master resta nascosto. */
+  private readonly pulsantiSerie = new Map<Serie, HTMLButtonElement>();
+  /** Il nome della serie scelta nel titolo della scelta, per quando i pulsanti mostrano soltanto i campioni. */
+  private readonly nomeSerieScelta = crea('span', 'serie-scelta');
 
-  constructor(azioni: Azioni, serie: SerieDelGiocatore) {
+  constructor(azioni: Azioni, serie: Serie, serieDelMaster: Serie) {
     this.azioni = azioni;
     this.costruisciPannello();
-    this.costruisciSerie(serie);
+    this.costruisciSerie(serie, serieDelMaster);
     const tira = elemento<HTMLButtonElement>('tira');
     const vantaggio = elemento<HTMLButtonElement>('vantaggio');
     const svantaggio = elemento<HTMLButtonElement>('svantaggio');
@@ -245,31 +256,44 @@ export class Interfaccia {
     this.aggiornaPannello();
   }
 
-  /** In fondo al pannello dei dadi, la scelta della serie: un pulsante per serie, col suo campione di colore. */
-  private costruisciSerie(scelta: SerieDelGiocatore): void {
+  /**
+   * In fondo al pannello dei dadi, la scelta della serie: un pulsante per serie, col suo campione di colore.
+   * La serie del master non c'è: è sua.
+   */
+  private costruisciSerie(scelta: Serie, serieDelMaster: Serie): void {
     const gruppo = crea('div', 'serie');
     gruppo.setAttribute('role', 'radiogroup');
     const titolo = tr({ it: 'Serie', en: 'Set' });
     gruppo.setAttribute('aria-label', titolo);
-    gruppo.append(crea('h3', undefined, titolo));
-    const pulsanti = SERIE_DEL_GIOCATORE.map((serie) => {
+    const testa = crea('h3', undefined, titolo);
+    testa.append(this.nomeSerieScelta);
+    gruppo.append(testa);
+    for (const serie of SERIE) {
       const b = crea('button', 'scelta');
       b.type = 'button';
       b.setAttribute('role', 'radio');
       b.title = NOME_SERIE[serie]();
       b.append(crea('span', `campione ${serie}`), crea('span', 'nome-serie', NOME_SERIE[serie]()));
       b.addEventListener('click', () => {
-        segna(serie);
+        this.segnaSerie(serie);
         this.azioni.scegliSerie(serie);
       });
       gruppo.append(b);
-      return { serie, b };
-    });
-    const segna = (quale: SerieDelGiocatore) => {
-      for (const { serie, b } of pulsanti) b.setAttribute('aria-checked', String(serie === quale));
-    };
-    segna(scelta);
+      this.pulsantiSerie.set(serie, b);
+    }
+    this.serieDelMaster(serieDelMaster, scelta);
     this.pannello.append(gruppo);
+  }
+
+  private segnaSerie(quale: Serie): void {
+    for (const [serie, b] of this.pulsantiSerie) b.setAttribute('aria-checked', String(serie === quale));
+    this.nomeSerieScelta.textContent = ` · ${NOME_SERIE[quale]()}`;
+  }
+
+  /** Il master ha preso la sua serie: sparisce dalla scelta, e `scelta` è quella che ha adesso chi gioca. */
+  serieDelMaster(serie: Serie, scelta: Serie): void {
+    for (const [s, b] of this.pulsantiSerie) b.hidden = s === serie;
+    this.segnaSerie(scelta);
   }
 
   private costruisciPannello(): void {

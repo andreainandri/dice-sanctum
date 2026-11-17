@@ -8,13 +8,15 @@ import { misureCorte, misureTorre } from '../physics/torre.ts';
 import { type SpecDado } from '../physics/vassoio.ts';
 import { FORME, type Ruolo, geometria } from '../shared/dadi.ts';
 import { type Quat, type V3 } from '../shared/vettori.ts';
-import { type Serie, type SerieDelGiocatore, TONI, type Tono, geometriaDado, impostaAnisotropia, materialeDado } from './facce.ts';
+import { SERIE_DEL_MASTER_DI_PARTENZA, SERIE_DI_PARTENZA, type Serie } from '../shared/serie.ts';
+import { TONI, type Tono, geometriaDado, impostaAnisotropia, materialeDado } from './facce.ts';
 import { type MisureCornice, geometriaCornice, geometriaFilo } from './cornice.ts';
 import { campoDellaTarga, pezziDellaFacciata, quotaDiTaglio } from './facciata.ts';
 import { type Trame, ambiente, materialeLegno, materialeOttone, materialeVelluto } from './materiali.ts';
 
 /** Inclinazione della camera dalla verticale. */
-const INCLINAZIONE = (40 * Math.PI) / 180;
+/** Di quanto la camera guarda dall'alto: l'angolo fra la verticale e la direzione verso la camera. */
+export const INCLINAZIONE = (40 * Math.PI) / 180;
 /** Quanto del riquadro occupa il vassoio, in coordinate normalizzate. */
 const RIEMPIMENTO = { x: 0.94, y: 0.9 };
 /**
@@ -76,9 +78,11 @@ export class Scena {
   private readonly cfg: ConfigFisica;
   private readonly osservatore: ResizeObserver;
   private readonly risorse: { dispose(): void }[] = [];
-  private dadi: { mesh: THREE.Mesh; spec: SpecDado; serie: Serie; tono: Tono }[] = [];
+  private dadi: { mesh: THREE.Mesh; spec: SpecDado; di: 'giocatore' | 'master'; serie: Serie; tono: Tono }[] = [];
   /** La serie con cui tira chi gioca al tavolo. */
-  private serieDelGiocatore: SerieDelGiocatore;
+  private serieDelGiocatore: Serie;
+  /** La serie dei tiri in chiaro del master: la sceglie lui, e chi gioca non la può prendere. */
+  private serieDelMaster: Serie;
   private disegnoChiesto = false;
   /**
    * La luce del lampo sta sempre in scena, spenta: aggiungerla al momento del 20 cambierebbe il numero
@@ -89,10 +93,11 @@ export class Scena {
   private readonly luci = new THREE.Group();
   private lampoAttivo: { materiale: THREE.MeshPhysicalMaterial; riposo: number; inizio: number; giro: number } | null = null;
 
-  constructor(contenitore: HTMLElement, cfg: ConfigFisica, trame: Trame, serie: SerieDelGiocatore = 'perla') {
+  constructor(contenitore: HTMLElement, cfg: ConfigFisica, trame: Trame, serie: Serie = SERIE_DI_PARTENZA, serieDelMaster: Serie = SERIE_DEL_MASTER_DI_PARTENZA) {
     this.contenitore = contenitore;
     this.cfg = cfg;
     this.serieDelGiocatore = serie;
+    this.serieDelMaster = serieDelMaster;
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.shadowMap.enabled = true;
@@ -124,7 +129,7 @@ export class Scena {
    */
   private prepara(): void {
     this.preparaSerie(this.serieDelGiocatore);
-    this.preparaSerie('master');
+    this.preparaSerie(this.serieDelMaster);
   }
 
   private preparaSerie(serie: Serie): void {
@@ -147,12 +152,23 @@ export class Scena {
   }
 
   /** Cambia la serie di chi gioca: i suoi dadi già sul vassoio la prendono subito, quelli del master restano. */
-  scegliSerie(serie: SerieDelGiocatore): void {
+  scegliSerie(serie: Serie): void {
     if (serie === this.serieDelGiocatore) return;
     this.serieDelGiocatore = serie;
+    this.rivesti('giocatore', serie);
+  }
+
+  /** Cambia la serie del master: i suoi dadi già sul vassoio la prendono subito, quelli di chi gioca restano. */
+  scegliSerieDelMaster(serie: Serie): void {
+    if (serie === this.serieDelMaster) return;
+    this.serieDelMaster = serie;
+    this.rivesti('master', serie);
+  }
+
+  private rivesti(di: 'giocatore' | 'master', serie: Serie): void {
     this.preparaSerie(serie);
     for (const d of this.dadi) {
-      if (d.serie === 'master') continue;
+      if (d.di !== di) continue;
       d.serie = serie;
       d.mesh.material = materialeDado(d.spec.forma, d.spec.ruolo, d.tono, serie);
     }
@@ -368,13 +384,13 @@ export class Scena {
   impostaDadi(specs: readonly SpecDado[], di: 'giocatore' | 'master' = 'giocatore'): void {
     this.fermaLampo();
     for (const d of this.dadi) this.scena.remove(d.mesh);
-    const serie: Serie = di === 'master' ? 'master' : this.serieDelGiocatore;
+    const serie = di === 'master' ? this.serieDelMaster : this.serieDelGiocatore;
     this.dadi = specs.map((spec) => {
       const mesh = new THREE.Mesh(geometriaDado(spec.forma), materialeDado(spec.forma, spec.ruolo, 'normale', serie));
       mesh.castShadow = true;
       mesh.receiveShadow = true;
       this.scena.add(mesh);
-      return { mesh, spec, serie, tono: 'normale' };
+      return { mesh, spec, di, serie, tono: 'normale' };
     });
   }
 

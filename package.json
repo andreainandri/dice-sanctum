@@ -1,6 +1,6 @@
 {
   "name": "dice-sanctum",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "description": "A 3D dice table with real physics for tabletop role-playing with an AI game master: every roll reaches the DM through a local bridge and an MCP server.",
   "license": "MIT",

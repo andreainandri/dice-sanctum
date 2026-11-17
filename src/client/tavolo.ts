@@ -32,8 +32,8 @@ export interface Ascoltatore {
   inizioPerChiGioca(tiri: readonly TiroCompletato[]): void;
   /** I dadi tirati al posto di chi gioca sono fermi. `visto` è falso quando non si sono mostrati. */
   finePerChiGioca(tiri: readonly TiroCompletato[], visto: boolean): void;
-  /** Un dado ha toccato qualcosa: serve al suono. */
-  urto?(u: Urto): void;
+  /** Un dado ha toccato qualcosa: serve al suono, che vuole sapere anche di chi sono i dadi. */
+  urto?(u: Urto, di: 'master' | 'giocatore'): void;
 }
 
 interface Posa {
@@ -201,7 +201,7 @@ export class Tavolo {
       c.lancio.passo();
       c.dopo = this.leggiPose();
       for (const i of c.ritirati) c.urti.salta(i);
-      for (const u of c.urti.passo(c.dopo.map((p) => p.p), this.vassoio.cfg.passo)) this.ascolta.urto?.(u);
+      for (const u of c.urti.passo(c.dopo.map((p) => p.p), this.vassoio.cfg.passo)) this.ascolta.urto?.(u, 'giocatore');
       // Un dado ritirato, o appena lasciato cadere, salta di posto: niente interpolazione attraverso il salto.
       if (c.ritirati.size > 0) c.prima = c.prima.map((p, i) => (c.ritirati.has(i) ? c.dopo[i]! : p));
     }
@@ -377,7 +377,7 @@ export class Tavolo {
     // Gli urti passati da poco suonano; quelli rimasti indietro (la scheda era in sottofondo) si saltano.
     while (r.suonati < r.urti.length && r.urti[r.suonati]!.t <= t) {
       const { t: quando, urto } = r.urti[r.suonati++]!;
-      if (t - quando < URTO_VECCHIO) this.ascolta.urto?.(urto);
+      if (t - quando < URTO_VECCHIO) this.ascolta.urto?.(urto, r.lancio.di);
     }
     if (t < r.letta.durata) {
       requestAnimationFrame(this.giroDelMaster);

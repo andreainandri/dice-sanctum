@@ -12,7 +12,8 @@ import { caricaCaratteri } from './caratteri.ts';
 import { Collegamento } from './collegamento.ts';
 import { Interfaccia, preparaLingua } from './interfaccia.ts';
 import { caricaTrame } from './materiali.ts';
-import { SERIE_DEL_GIOCATORE, type SerieDelGiocatore } from './facce.ts';
+import { SERIE_DEL_MASTER_DI_PARTENZA, SERIE_DI_PARTENZA, type Serie, eSerie, serieLibera } from '../shared/serie.ts';
+import { MATERIA } from './facce.ts';
 import { Scena } from './scena.ts';
 import { Suono, montaPulsanteDelSuono } from './suono.ts';
 import { type Ascoltatore, Tavolo } from './tavolo.ts';
@@ -50,18 +51,37 @@ const vassoio = new Vassoio(R, FISICA);
   for (let k = 0; k < 30 && l.stato === 'in corso'; k++) l.passo();
   vassoio.pulisci();
 }
-// La serie di dadi di chi gioca resta scelta da una visita all'altra.
+// Le serie di dadi di chi gioca e del master restano scritte da una visita all'altra: quella del master la
+// manda il ponte, e la copia qui serve soltanto ad aprire la pagina giusta prima che arrivi.
 const CHIAVE_SERIE = 'dice-sanctum.serie';
-const serieSalvata = (): SerieDelGiocatore => {
+const CHIAVE_SERIE_DEL_MASTER = 'dice-sanctum.serie-del-master';
+const leggiSerie = (chiave: string, altrimenti: Serie): Serie => {
   try {
-    const s = localStorage.getItem(CHIAVE_SERIE);
-    return SERIE_DEL_GIOCATORE.find((x) => x === s) ?? SERIE_DEL_GIOCATORE[0];
+    const s = localStorage.getItem(chiave);
+    return eSerie(s) ? s : altrimenti;
   } catch {
-    return SERIE_DEL_GIOCATORE[0];
+    return altrimenti;
   }
 };
-const serie = serieSalvata();
-const scena = new Scena(document.getElementById('tela')!, FISICA, trame, serie);
+const scriviSerie = (chiave: string, serie: Serie) => {
+  try {
+    localStorage.setItem(chiave, serie);
+  } catch {
+    // Senza localStorage la scelta vale fino alla chiusura della pagina.
+  }
+};
+let serieDelMaster = leggiSerie(CHIAVE_SERIE_DEL_MASTER, SERIE_DEL_MASTER_DI_PARTENZA);
+/** La serie di chi gioca adesso: il suono degli urti ne segue la materia. */
+let serieScelta = leggiSerie(CHIAVE_SERIE, SERIE_DI_PARTENZA);
+if (serieScelta === serieDelMaster) serieScelta = serieLibera(serieDelMaster);
+const scena = new Scena(document.getElementById('tela')!, FISICA, trame, serieScelta, serieDelMaster);
+
+/** Chi gioca cambia serie, dal pulsante o perché il master ha preso la sua. */
+const cambiaSerie = (s: Serie) => {
+  scena.scegliSerie(s);
+  serieScelta = s;
+  scriviSerie(CHIAVE_SERIE, s);
+};
 
 /** Il TIRA dell'avviso: esattamente la formula e l'etichetta della richiesta. */
 const tiraPerIlDm = async (r: RichiestaCreata): Promise<TiroDalTavolo> => {
@@ -84,21 +104,15 @@ const ui = new Interfaccia(
     lancia: (f, etichetta) => tavolo.tira(f, etichetta),
     lanciaRichiesta: tiraPerIlDm,
     pulisci: () => tavolo.pulisci(),
-    scegliSerie: (s) => {
-      scena.scegliSerie(s);
-      try {
-        localStorage.setItem(CHIAVE_SERIE, s);
-      } catch {
-        // Senza localStorage la scelta vale fino alla chiusura della pagina.
-      }
-    },
+    scegliSerie: cambiaSerie,
   },
-  serie,
+  serieScelta,
+  serieDelMaster,
 );
 const suono = new Suono();
 montaPulsanteDelSuono(document.getElementById('suono') as HTMLButtonElement, suono);
 const ascolta: Ascoltatore = {
-  urto: (u) => suono.colpo(u),
+  urto: (u, di) => suono.colpo({ ...u, materia: MATERIA[di === 'master' ? serieDelMaster : serieScelta] }),
   inizio: () => ui.inizio(),
   ritiro: (frase) => ui.ritiro(frase),
   fine: (e) => {
@@ -113,6 +127,15 @@ const ascolta: Ascoltatore = {
 };
 const tavolo = new Tavolo(vassoio, scena, ascolta);
 const collegamento = new Collegamento({
+  // Il master prende la sua serie: i suoi dadi la vestono, e se era quella di chi gioca, chi gioca passa
+  // alla serie dopo.
+  dadiDelMaster: (s) => {
+    serieDelMaster = s;
+    scriviSerie(CHIAVE_SERIE_DEL_MASTER, s);
+    scena.scegliSerieDelMaster(s);
+    if (serieScelta === s) cambiaSerie(serieLibera(s));
+    ui.serieDelMaster(s, serieScelta);
+  },
   stato: (collegato, inCoda) => ui.stato(collegato, inCoda),
   richieste: (r) => ui.richieste(r),
   cronaca: (registrati, inCoda) => ui.cronaca(registrati, inCoda),

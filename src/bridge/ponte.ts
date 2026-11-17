@@ -4,13 +4,14 @@
 //   /ws          il tavolo (il browser): stato all'arrivo, eventi dal vivo, tiri da registrare
 //   /feed        gli eventi per il server MCP: quelli dopo ?dopo=seq (o dal ?dal=ora), poi dal vivo
 //   /api/...     stato, eventi, richieste di tiro, attese e annullamenti, i tiri del master e quelli
-//                che il master fa al posto di chi gioca
+//                che il master fa al posto di chi gioca, la serie dei dadi del master
 //   il resto     i file della pagina, da dist/client
 
 import { randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { extname, join, normalize, resolve, sep } from 'node:path';
+import { dirname, extname, join, normalize, resolve, sep } from 'node:path';
 import { WebSocketServer, type WebSocket } from 'ws';
 import {
   type Evento,
@@ -31,10 +32,12 @@ import {
   PAUSA_DOPO_IL_MASTER,
   type ProblemaRichiesta,
   type RispostaAttesa,
+  type RispostaDadiDelMaster,
   type RispostaStato,
   type RispostaTiriDelMaster,
   type RispostaTiriPerChiGioca,
 } from '../shared/protocollo.ts';
+import { SERIE, SERIE_DEL_MASTER_DI_PARTENZA, type Serie, eSerie } from '../shared/serie.ts';
 import { type LancioDelMaster, ManoDelMaster } from './master.ts';
 import { Registro } from './registro.ts';
 import { ID_RICHIESTA, TiroRespinto, verificaTiro } from './verifica.ts';
@@ -50,6 +53,8 @@ export interface OpzioniPonte {
   /** 0 per una porta libera qualsiasi (le prove). */
   porta: number;
   registro: string;
+  /** Il file con la serie scelta dal master: di serie dadi-del-master.json accanto al registro. */
+  dadiDelMaster?: string;
   cartellaClient: string;
   log?: (riga: string) => void;
   /**
@@ -116,6 +121,8 @@ export class Ponte {
   /** Le risposte al DM che aspettano la fine della loro ripresa. */
   private readonly pause = new Set<{ timer: NodeJS.Timeout; via: () => void }>();
   private spento = false;
+  private readonly fileDadiDelMaster: string;
+  private serieDelMaster: Serie;
 
   constructor(opzioni: OpzioniPonte) {
     this.opzioni = opzioni;
@@ -123,6 +130,8 @@ export class Ponte {
     this.ritmoDelleRiprese = opzioni.ritmoDelleRiprese ?? 1;
     this.registro = new Registro(opzioni.registro);
     for (const s of this.registro.scartate) this.log(`roll log: line ${s.riga} unreadable, skipped: ${inRiga(s.testo)}`);
+    this.fileDadiDelMaster = opzioni.dadiDelMaster ?? join(dirname(opzioni.registro), 'dadi-del-master.json');
+    this.serieDelMaster = this.leggiDadiDelMaster();
     this.server = createServer((req, res) => {
       this.gestisci(req, res).catch((e: unknown) => this.rispondiErrore(res, e));
     });
@@ -237,6 +246,7 @@ export class Ponte {
       if (url.pathname === '/api/richieste') return this.chiedi(corpo, res);
       if (url.pathname === '/api/master/tiri') return this.tiraIlMaster(corpo, res);
       if (url.pathname === '/api/giocatore/tiri') return this.tiraPerChiGioca(corpo, res);
+      if (url.pathname === '/api/master/dadi') return this.scegliDadiDelMaster(corpo, res);
       const m = /^\/api\/richieste\/([^/]+)\/(attendi|annulla)$/.exec(url.pathname);
       if (m) {
         const requestId = m[1]!;
@@ -329,7 +339,53 @@ export class Ponte {
   // ---- stato, eventi, richieste ----
 
   stato(): RispostaStato {
-    return { tavoli: this.tavoli.size, ultimoSeq: this.registro.ultimoSeq, richiesteAperte: this.registro.richiesteAperte() };
+    return { tavoli: this.tavoli.size, ultimoSeq: this.registro.ultimoSeq, richiesteAperte: this.registro.richiesteAperte(), dadiDelMaster: this.serieDelMaster };
+  }
+
+  // ---- i dadi del master ----
+
+  /** La serie salvata dal master; senza file, o con un file che non si legge, quella di partenza. */
+  private leggiDadiDelMaster(): Serie {
+    let testo: string;
+    try {
+      testo = readFileSync(this.fileDadiDelMaster, 'utf8');
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') this.log(`master dice: ${this.fileDadiDelMaster} unreadable, using ${SERIE_DEL_MASTER_DI_PARTENZA}`);
+      return SERIE_DEL_MASTER_DI_PARTENZA;
+    }
+    try {
+      const dato = JSON.parse(testo) as { serie?: unknown };
+      if (eSerie(dato.serie)) return dato.serie;
+    } catch {
+      // Sotto: lo stesso avviso di un nome sconosciuto.
+    }
+    this.log(`master dice: ${this.fileDadiDelMaster} holds no known set, using ${SERIE_DEL_MASTER_DI_PARTENZA}`);
+    return SERIE_DEL_MASTER_DI_PARTENZA;
+  }
+
+  /**
+   * Il master sceglie la serie dei suoi dadi: resta scritta accanto al registro (prima in un file a parte,
+   * poi al suo posto, così un file a metà non c'è mai) e i tavoli collegati la prendono subito.
+   */
+  private scegliDadiDelMaster(corpo: Record<string, unknown>, res: ServerResponse): void {
+    const serie = corpo.serie;
+    if (!eSerie(serie)) throw new ErroreHttp(400, `serie must be one of: ${SERIE.join(', ')}`);
+    if (serie !== this.serieDelMaster) {
+      const provvisorio = `${this.fileDadiDelMaster}.${process.pid}.tmp`;
+      try {
+        mkdirSync(dirname(this.fileDadiDelMaster), { recursive: true });
+        writeFileSync(provvisorio, `${JSON.stringify({ serie })}\n`);
+        renameSync(provvisorio, this.fileDadiDelMaster);
+      } catch (e) {
+        rmSync(provvisorio, { force: true });
+        throw new ErroreHttp(500, `the choice cannot be saved in ${this.fileDadiDelMaster}: ${e instanceof Error ? e.message : String(e)}`);
+      }
+      this.serieDelMaster = serie;
+      this.log(`master dice: ${serie}`);
+    }
+    for (const ws of this.tavoli) this.manda(ws, { tipo: 'dadi del master', serie });
+    const risposta: RispostaDadiDelMaster = { serie, tavoli: this.tavoli.size };
+    this.json(res, 200, risposta);
   }
 
   private eventi(p: URLSearchParams, res: ServerResponse): void {
@@ -548,6 +604,7 @@ export class Ponte {
       ultimoSeq: this.registro.ultimoSeq,
       richieste: this.registro.richiesteAperte(),
       cronaca: this.cronacaPerIlTavolo(),
+      dadiDelMaster: this.serieDelMaster,
     });
     ws.on('message', (dati, binario) => {
       if (binario) return this.manda(ws, { tipo: 'respinto', id: null, motivo: 'binary message', richiesta: null });

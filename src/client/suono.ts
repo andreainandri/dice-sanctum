@@ -1,7 +1,8 @@
 // Il suono dei dadi, sintetizzato: nessun campione registrato. Ogni urto ricavato dal moto dei dadi
 // (physics/urti.ts) diventa un colpo breve, diverso per quello che il dado ha toccato: il fondo foderato
 // (un tonfo sordo), il legno di sponde, scivoli e rampa (un colpo asciutto), un altro dado (un ticchettio
-// di resina). La forza dell'urto fa il volume; dentro la torre il colpo suona chiuso nel legno.
+// di resina). I dadi di metallo e di pietra hanno colpi loro: il metallo squilla e la pietra schiocca.
+// La forza dell'urto fa il volume; dentro la torre il colpo suona chiuso nel legno.
 // Il browser lascia suonare soltanto dopo un gesto di chi sta alla pagina: prima il suono tace.
 
 import { type TipoUrto } from '../physics/urti.ts';
@@ -31,6 +32,9 @@ interface Ricetta {
   toni: readonly { da: number; a: number; coda: number; volume: number }[];
   volume: number;
 }
+
+/** Di che cosa sono i dadi che suonano. */
+export type Materia = 'resina' | 'metallo' | 'pietra';
 
 const RICETTE: Record<TipoUrto, Ricetta> = {
   // Feltro su legno: basso e corto, senza attacco.
@@ -68,8 +72,94 @@ const RICETTE: Record<TipoUrto, Ricetta> = {
   },
 };
 
+/**
+ * I colpi dei dadi che non sono di resina. Il metallo sul metallo squilla a lungo, con parziali che non stanno
+ * in armonia, come una moneta; sul legno aggiunge un filo di squillo al colpo; sul velluto è un tonfo più
+ * pesante. La pietra schiocca, più bassa e più piena della resina, e pesa di più su legno e velluto.
+ */
+const ALTRE_RICETTE: Record<Exclude<Materia, 'resina'>, Record<TipoUrto, Ricetta>> = {
+  metallo: {
+    fondo: {
+      filtro: 'lowpass',
+      frequenza: 540,
+      q: 0.7,
+      codaRumore: 0.06,
+      rumore: 0.9,
+      toni: [
+        { da: 112, a: 66, coda: 0.09, volume: 0.8 },
+        { da: 2350, a: 2340, coda: 0.035, volume: 0.05 },
+      ],
+      volume: 0.95,
+    },
+    sponda: {
+      filtro: 'bandpass',
+      frequenza: 1050,
+      q: 2.2,
+      codaRumore: 0.04,
+      rumore: 0.8,
+      toni: [
+        { da: 430, a: 400, coda: 0.06, volume: 0.5 },
+        { da: 690, a: 660, coda: 0.04, volume: 0.3 },
+        { da: 2650, a: 2640, coda: 0.07, volume: 0.12 },
+      ],
+      volume: 0.85,
+    },
+    dado: {
+      filtro: 'bandpass',
+      frequenza: 5200,
+      q: 5,
+      codaRumore: 0.012,
+      rumore: 0.7,
+      toni: [
+        { da: 3150, a: 3140, coda: 0.18, volume: 0.3 },
+        { da: 4920, a: 4905, coda: 0.12, volume: 0.2 },
+        { da: 7380, a: 7360, coda: 0.07, volume: 0.12 },
+      ],
+      // Il tintinnio dura più di quello della resina: a parità di volume avrebbe il doppio dell'energia.
+      volume: 0.35,
+    },
+  },
+  pietra: {
+    fondo: {
+      filtro: 'lowpass',
+      frequenza: 580,
+      q: 0.7,
+      codaRumore: 0.055,
+      rumore: 0.9,
+      toni: [{ da: 118, a: 68, coda: 0.085, volume: 0.8 }],
+      volume: 0.92,
+    },
+    sponda: {
+      filtro: 'bandpass',
+      frequenza: 1000,
+      q: 2.2,
+      codaRumore: 0.04,
+      rumore: 0.8,
+      toni: [
+        { da: 430, a: 400, coda: 0.06, volume: 0.5 },
+        { da: 690, a: 660, coda: 0.04, volume: 0.3 },
+      ],
+      volume: 0.85,
+    },
+    dado: {
+      filtro: 'bandpass',
+      frequenza: 2600,
+      q: 2.5,
+      codaRumore: 0.014,
+      rumore: 0.9,
+      toni: [
+        { da: 2100, a: 2050, coda: 0.035, volume: 0.32 },
+        { da: 3900, a: 3850, coda: 0.02, volume: 0.18 },
+      ],
+      volume: 0.55,
+    },
+  },
+};
+
 export interface Colpo {
   tipo: TipoUrto;
+  /** Di che cosa è il dado: di serie resina. */
+  materia?: Materia;
   /** Da 0 a 1. */
   forza: number;
   /** Dove, da sinistra (-1) a destra (1). */
@@ -135,7 +225,7 @@ function bufferDiRumore(ctx: BaseAudioContext): AudioBuffer {
  * Vale per il contesto vero e per quello fuori linea delle prove.
  */
 export function montaColpo(ctx: BaseAudioContext, uscita: AudioNode, rumore: AudioBuffer, c: Colpo, quando: number): number {
-  const r = RICETTE[c.tipo];
+  const r = c.materia && c.materia !== 'resina' ? ALTRE_RICETTE[c.materia][c.tipo] : RICETTE[c.tipo];
   const forza = Math.max(0, Math.min(1, c.forza));
   // Un urto forte è anche più chiaro e un po' più lungo; ogni colpo ha la sua piccola stonatura.
   const stona = 0.88 + Math.random() * 0.24;

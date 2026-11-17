@@ -11,6 +11,7 @@ import {
   type TiroDelMaster,
   type VoceDiCronaca,
 } from './eventi.ts';
+import { type Serie } from './serie.ts';
 
 export const PORTA_DEL_PONTE = 4777;
 
@@ -34,8 +35,10 @@ export type ProblemaRichiesta = 'sconosciuta' | 'soddisfatta' | 'annullata';
 
 /** Dal ponte al tavolo. */
 export type DalPonte =
-  /** All'arrivo: le richieste aperte e gli ultimi tiri del registro, per la cronaca. */
-  | { tipo: 'stato'; ultimoSeq: number; richieste: RichiestaCreata[]; cronaca: VoceDiCronaca[] }
+  /** All'arrivo: le richieste aperte, gli ultimi tiri del registro per la cronaca, e la serie del master. */
+  | { tipo: 'stato'; ultimoSeq: number; richieste: RichiestaCreata[]; cronaca: VoceDiCronaca[]; dadiDelMaster: Serie }
+  /** Il master ha scelto un'altra serie per i suoi dadi: chi gioca non la può più prendere. */
+  | { tipo: 'dadi del master'; serie: Serie }
   /** Un evento appena scritto nel registro, da qualunque parte venga; i tiri in chiaro del master arrivano col loro lancio. */
   | { tipo: 'evento'; evento: EventoPerIlTavolo }
   /** Un lancio in chiaro del master: i suoi tiri, già nel registro, e la ripresa da mostrare coi dadi del master. */
@@ -62,6 +65,15 @@ export interface RispostaStato {
   tavoli: number;
   ultimoSeq: number;
   richiesteAperte: RichiestaCreata[];
+  /** La serie dei dadi del master. */
+  dadiDelMaster: Serie;
+}
+
+/** POST /api/master/dadi { serie }: il master sceglie la serie dei suoi dadi. */
+export interface RispostaDadiDelMaster {
+  serie: Serie;
+  /** I tavoli collegati, che l'hanno già presa. */
+  tavoli: number;
 }
 
 export interface RispostaEventi {

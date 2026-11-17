@@ -1,7 +1,7 @@
 {
   "name": "dice-sanctum",
   "displayName": "The Dice Sanctum",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "A 3D dice table with real physics for tabletop role-playing with Claude as the game master: the player rolls in the browser, every roll reaches the session, and the master's own dice land on the same tray.",
   "author": {
     "name": "Andrea Inandri",

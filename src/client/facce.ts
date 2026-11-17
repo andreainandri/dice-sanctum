@@ -1,6 +1,10 @@
-// Le mesh dei dadi e le loro facce dipinte, in tre serie. Due sono di chi gioca, da scegliere: Perla azzurra
-// (resina azzurra a nuvole, numeri d'argento) e Ossidiana e oro (corpo nero lucido, numeri d'oro incisi).
-// La terza è del master: sangue di bue marmorizzato coi numeri d'oro, che a colpo d'occhio non si confonde.
+// Le mesh dei dadi e le loro facce dipinte, in nove serie (l'elenco sta in shared/serie.ts): Perla azzurra
+// (resina azzurra a nuvole, numeri d'argento), Ossidiana e oro (nero lucido, numeri d'oro), Zaffiro (alluminio
+// sabbiato, numeri blu notte, una gemma al posto del 20), Malachite (pietra verde a bande, numeri d'oro),
+// Avorio (osso antico, numeri neri), Grafite e oro (carbone opaco, numeri d'oro pallido), Bufera (blu fumo a
+// turbini d'argento, numeri bianchi), Carnevale (arancio zucca coi brillantini, numeri neri) e Sangue di bue
+// (rosso scuro marmorizzato, numeri d'oro). Una la tiene il master, le altre le sceglie chi gioca: i dadi dei
+// due non si confondono mai. Il d10 delle decine di ogni serie ha un aspetto suo, diverso dal compagno.
 // La mesh nasce dagli stessi vertici del collisore e del lettore; gli spigoli smussati sono soltanto disegno
 // e stanno dentro il guscio, con ogni faccia sul piano della faccia del collisore: un dado posato tocca il
 // fondo dove lo tocca la fisica. I numeri si dipingono su tele (una cella per faccia) dalla stessa tabella
@@ -9,16 +13,12 @@
 
 import * as THREE from 'three';
 import { type Forma, type Ruolo, etichetta, geometria, vaSottolineata } from '../shared/dadi.ts';
+import type { Materia } from './suono.ts';
+import { type Serie } from '../shared/serie.ts';
 import { type V3, diff, lunghezza, normalizza, punto, scala, somma, vettoriale } from '../shared/vettori.ts';
 
 export const TONI = ['normale', 'scartato', 'oro', 'rosso'] as const;
 export type Tono = (typeof TONI)[number];
-/** Le serie fra cui sceglie chi gioca al tavolo; la prima è quella di partenza. */
-export const SERIE_DEL_GIOCATORE = ['perla', 'ossidiana'] as const;
-export type SerieDelGiocatore = (typeof SERIE_DEL_GIOCATORE)[number];
-/** Tutte le serie: quelle di chi gioca e quella del master. */
-export const SERIE = [...SERIE_DEL_GIOCATORE, 'master'] as const;
-export type Serie = (typeof SERIE)[number];
 
 const CELLA = 256;
 const MARGINE = 8;
@@ -38,6 +38,22 @@ interface Aspetto {
   vene?: Vene;
   /** Un filo scuro intorno alle cifre, dove il corpo chiaro le confonderebbe. */
   contorno?: string;
+  /** Quanta vernice lucida copre il corpo (il clearcoat): 1 la resina e la pietra lucide, 0 il metallo satinato. */
+  vernice?: number;
+  /** Il colore della luce del 20 naturale, dove l'oro non sta bene, e quanto è forte (di serie 1,3). */
+  lampo?: number;
+  lampoForza?: number;
+  /** Al posto del 20 del d20, una gemma incastonata. */
+  gemma?: Gemma;
+  /** Brillantini nella resina: il loro colore e quanti in una faccia (circa). */
+  brillantini?: { colore: string; quanti: number };
+}
+
+/** Una pietra tonda tagliata a faccette: il colore di fondo, le faccette chiare e quelle scure. */
+interface Gemma {
+  fondo: string;
+  chiara: string;
+  scura: string;
 }
 
 /**
@@ -51,6 +67,8 @@ interface Vene {
   vena: string;
   forza: number;
   fitte: number;
+  /** Bande che seguono le nuvole, come nella malachite: quante in un'unità del rumore. Senza, nuvole e basta. */
+  bande?: number;
 }
 
 /** Perla azzurra: resina azzurra a nuvole con striature di perla, numeri d'argento. */
@@ -74,7 +92,7 @@ const NOTTE: Aspetto = {
 const OSSIDIANA: Aspetto = { corpo: '#0d0c0f', numeri: '#caa252', datiCorpo: 'rgb(255, 38, 0)', datiNumeri: 'rgb(70, 90, 255)' };
 /** Bronzo brunito coi numeri neri: il d10 delle decine si distingue dal compagno del d100 su qualunque fondo. */
 const BRONZO: Aspetto = { corpo: '#7a5a38', numeri: '#121014', datiCorpo: 'rgb(255, 105, 140)', datiNumeri: 'rgb(70, 115, 0)' };
-/** I dadi del master: sangue di bue marmorizzato, con le vene quasi nere e i numeri d'oro. */
+/** Sangue di bue: rosso scuro marmorizzato, con le vene quasi nere e i numeri d'oro. I dadi del master, di partenza. */
 const SANGUE: Aspetto = {
   corpo: '#5c0f17',
   numeri: '#efcf80',
@@ -82,7 +100,7 @@ const SANGUE: Aspetto = {
   datiNumeri: 'rgb(70, 90, 255)',
   vene: { scuro: '#35060b', chiaro: '#8a1722', vena: '#120204', forza: 0.85, fitte: 0.9 },
 };
-/** Il d10 delle decine del master, più scuro del compagno e coi numeri color osso. */
+/** Il d10 delle decine del sangue di bue, più scuro del compagno e coi numeri color osso. */
 const SANGUE_SCURO: Aspetto = {
   corpo: '#34080e',
   numeri: '#e6dcc6',
@@ -90,10 +108,148 @@ const SANGUE_SCURO: Aspetto = {
   datiNumeri: 'rgb(70, 115, 0)',
   vene: { scuro: '#1b0306', chiaro: '#4d0e16', vena: '#8f2a30', forza: 0.4, fitte: 0.9 },
 };
+/**
+ * Zaffiro: alluminio sabbiato, chiaro e opaco, coi numeri incisi e riempiti di blu notte, e al posto del 20 uno
+ * zaffiro tondo in un castone triangolare. Il 20 naturale si accende di azzurro.
+ */
+const ZAFFIRO: Aspetto = {
+  // Metallo quasi tutto e ruvido, come la sabbiatura: i riflessi si allargano in un chiarore. Il colore tira
+  // all'azzurro perché le luci della stanza sono calde: sotto di loro l'alluminio torna grigio chiaro.
+  corpo: '#b8c4d8',
+  numeri: '#1a2766',
+  datiCorpo: 'rgb(255, 140, 217)',
+  datiNumeri: 'rgb(70, 90, 0)',
+  vernice: 0,
+  lampo: 0x7fb0ff,
+  gemma: { fondo: '#1f4fd0', chiara: '#a9c6ff', scura: '#061654' },
+};
+/** Il d10 delle decine dello Zaffiro, rovesciato: alluminio anodizzato blu, coi numeri incisi fino al metallo chiaro. */
+const ZAFFIRO_DECINE: Aspetto = {
+  corpo: '#2a5fc8',
+  numeri: '#dfe5ee',
+  datiCorpo: 'rgb(255, 110, 230)',
+  datiNumeri: 'rgb(70, 120, 230)',
+  vernice: 0,
+  lampo: 0x7fb0ff,
+};
+/** Malachite: pietra verde lucida a bande scure e chiare che si inseguono, numeri d'oro incisi. */
+const MALACHITE: Aspetto = {
+  corpo: '#145c3a',
+  numeri: '#d9b45a',
+  datiCorpo: 'rgb(255, 30, 0)',
+  datiNumeri: 'rgb(70, 90, 255)',
+  contorno: '#0a2416',
+  vene: { scuro: '#0d4a2e', chiaro: '#3aa36b', vena: '#04190f', forza: 0.75, fitte: 0.6, bande: 3.2 },
+};
+/** Il d10 delle decine della malachite: più scuro, coi numeri color osso. */
+const MALACHITE_SCURA: Aspetto = {
+  corpo: '#0a2c1c',
+  numeri: '#e6dcc6',
+  datiCorpo: 'rgb(255, 30, 0)',
+  datiNumeri: 'rgb(70, 115, 0)',
+  vene: { scuro: '#061d12', chiaro: '#135a37', vena: '#2d7a52', forza: 0.5, fitte: 0.6, bande: 3.2 },
+};
+/** Avorio: osso antico appena ingiallito, satinato, coi numeri neri. */
+const AVORIO: Aspetto = {
+  corpo: '#e9dcc0',
+  numeri: '#17120e',
+  datiCorpo: 'rgb(255, 95, 0)',
+  datiNumeri: 'rgb(70, 140, 0)',
+  vernice: 0.35,
+  // Sull'osso chiaro i numeri accesi d'oro sparirebbero: si accendono d'ambra, piano.
+  lampo: 0xd9822b,
+  lampoForza: 0.6,
+  vene: { scuro: '#dccaa4', chiaro: '#f1e7cf', vena: '#c9b48c', forza: 0.3, fitte: 0.55 },
+};
+/** Il d10 delle decine dell'avorio: ebano coi numeri d'avorio. */
+const EBANO: Aspetto = {
+  corpo: '#1a1512',
+  numeri: '#eee4cc',
+  datiCorpo: 'rgb(255, 80, 0)',
+  datiNumeri: 'rgb(70, 100, 0)',
+  vernice: 0.6,
+  vene: { scuro: '#120e0b', chiaro: '#2a211b', vena: '#3d3027', forza: 0.35, fitte: 1.4 },
+};
+/** Grafite e oro: carbone opaco, quasi senza lucido, coi numeri d'oro pallido. */
+const GRAFITE: Aspetto = {
+  // Appena azzurrato: sotto le luci calde un grigio neutro si fa marrone.
+  corpo: '#23272e',
+  numeri: '#d9c27e',
+  datiCorpo: 'rgb(255, 175, 0)',
+  datiNumeri: 'rgb(70, 95, 190)',
+  vernice: 0.12,
+  vene: { scuro: '#1f2329', chiaro: '#2b3038', vena: '#363b44', forza: 0.2, fitte: 1.6 },
+};
+/** Il d10 delle decine della grafite: oro spazzolato coi numeri di carbone. */
+const ORO: Aspetto = {
+  corpo: '#c9a65a',
+  numeri: '#1e1c1b',
+  datiCorpo: 'rgb(255, 95, 255)',
+  datiNumeri: 'rgb(70, 150, 0)',
+  vernice: 0,
+};
+/** Bufera: resina blu fumo con turbini d'argento, come neve nel vento di notte, e numeri bianchi. */
+const BUFERA: Aspetto = {
+  corpo: '#101d33',
+  numeri: '#eef3f8',
+  datiCorpo: 'rgb(255, 40, 0)',
+  datiNumeri: 'rgb(70, 70, 150)',
+  contorno: '#09111e',
+  vene: { scuro: '#0e1a30', chiaro: '#1f3a5c', vena: '#a9c0d6', forza: 0.4, fitte: 1.1 },
+  brillantini: { colore: '#e6eef6', quanti: 50 },
+};
+/** Il d10 delle decine della bufera: ghiaccio chiaro coi numeri blu fumo. */
+const GHIACCIO: Aspetto = {
+  corpo: '#bcd2e0',
+  numeri: '#13252f',
+  datiCorpo: 'rgb(255, 40, 0)',
+  datiNumeri: 'rgb(70, 110, 0)',
+  vene: { scuro: '#a6c0d2', chiaro: '#dbe8f1', vena: '#f7fbff', forza: 0.45, fitte: 0.9 },
+};
+/** Carnevale: resina arancio zucca, piena di brillantini, coi numeri neri. Il 20 naturale si accende di viola. */
+const CARNEVALE: Aspetto = {
+  corpo: '#f2701a',
+  numeri: '#161012',
+  datiCorpo: 'rgb(255, 40, 0)',
+  datiNumeri: 'rgb(70, 120, 0)',
+  lampo: 0xb04dff,
+  lampoForza: 1,
+  vene: { scuro: '#d85a0c', chiaro: '#ff8f30', vena: '#ffb866', forza: 0.3, fitte: 0.7 },
+  brillantini: { colore: '#fff6dc', quanti: 180 },
+};
+/** Il d10 delle decine del carnevale: viola di notte, coi brillantini e i numeri arancio. */
+const VIOLA: Aspetto = {
+  corpo: '#3a1650',
+  numeri: '#ff9a3c',
+  datiCorpo: 'rgb(255, 40, 0)',
+  datiNumeri: 'rgb(70, 110, 0)',
+  lampo: 0xb04dff,
+  lampoForza: 1,
+  vene: { scuro: '#2a0f3c', chiaro: '#55246f', vena: '#9c5bc8', forza: 0.35, fitte: 0.8 },
+  brillantini: { colore: '#f3d9ff', quanti: 180 },
+};
 const ASPETTI: Record<Serie, Record<Ruolo, Aspetto>> = {
   perla: { semplice: PERLA, unita: PERLA, decine: NOTTE },
   ossidiana: { semplice: OSSIDIANA, unita: OSSIDIANA, decine: BRONZO },
-  master: { semplice: SANGUE, unita: SANGUE, decine: SANGUE_SCURO },
+  zaffiro: { semplice: ZAFFIRO, unita: ZAFFIRO, decine: ZAFFIRO_DECINE },
+  malachite: { semplice: MALACHITE, unita: MALACHITE, decine: MALACHITE_SCURA },
+  avorio: { semplice: AVORIO, unita: AVORIO, decine: EBANO },
+  grafite: { semplice: GRAFITE, unita: GRAFITE, decine: ORO },
+  bufera: { semplice: BUFERA, unita: BUFERA, decine: GHIACCIO },
+  carnevale: { semplice: CARNEVALE, unita: CARNEVALE, decine: VIOLA },
+  sangue: { semplice: SANGUE, unita: SANGUE, decine: SANGUE_SCURO },
+};
+/** Di che cosa sono i dadi di ogni serie: lo dice il suono degli urti. */
+export const MATERIA: Record<Serie, Materia> = {
+  perla: 'resina',
+  ossidiana: 'resina',
+  zaffiro: 'metallo',
+  malachite: 'pietra',
+  avorio: 'resina',
+  grafite: 'resina',
+  bufera: 'resina',
+  carnevale: 'resina',
+  sangue: 'resina',
 };
 /** Le vene si dipingono su una tela piccola per faccia, di tanti pixel di lato: sono larghe, e ingrandite restano lisce. */
 const TELA_VENE = 64;
@@ -147,6 +303,8 @@ export function materialeDado(forma: Forma, ruolo: Ruolo, tono: Tono, serie: Ser
   const d = disegno(forma, ruolo, serie);
   let m = d.materiali.get(tono);
   if (!m) {
+    const aspetto = ASPETTI[serie][ruolo];
+    const vernice = aspetto.vernice ?? 1;
     m = new THREE.MeshPhysicalMaterial({
       map: d.colore,
       roughnessMap: d.dati,
@@ -155,18 +313,18 @@ export function materialeDado(forma: Forma, ruolo: Ruolo, tono: Tono, serie: Ser
       bumpScale: 1.4,
       roughness: 1,
       metalness: 1,
-      clearcoat: 1,
+      clearcoat: vernice,
       clearcoatRoughness: 0.07,
       emissiveMap: d.luce,
       emissive: 0x000000,
     });
     if (tono === 'scartato') {
       m.color.set(0x5a5a5a);
-      m.clearcoat = 0.3;
+      m.clearcoat = Math.min(0.3, vernice);
     }
     if (tono === 'oro') {
-      m.emissive.set(0xffb648);
-      m.emissiveIntensity = 1.3;
+      m.emissive.set(aspetto.lampo ?? 0xffb648);
+      m.emissiveIntensity = aspetto.lampoForza ?? 1.3;
     }
     if (tono === 'rosso') {
       m.color.set(0xff5644);
@@ -176,6 +334,11 @@ export function materialeDado(forma: Forma, ruolo: Ruolo, tono: Tono, serie: Ser
     d.materiali.set(tono, m);
   }
   return m;
+}
+
+/** La direzione verso la cima del numero della faccia i, nel riferimento del dado. */
+export function altoDellaFaccia(forma: Forma, i: number): V3 {
+  return pianoFaccia(forma, i).alto;
 }
 
 /** Coordinate dei vertici di una faccia nel suo piano: x a destra, y verso la cima del numero. */
@@ -316,7 +479,14 @@ interface Pennello {
   /** Le vene del corpo e il seme da cui escono. */
   vene?: Vene;
   seme?: number;
+  /** Come si dipinge la gemma al posto del 20, su questa tela. */
+  gemma?: PennelloGemma;
+  /** I brillantini su questa tela: il colore (o i dati) di ognuno, quanti per faccia, e il seme dei posti. */
+  brillantini?: { colore: string; quanti: number; seme: number };
 }
+
+/** La gemma su ciascuna delle tre tele: i colori, i dati (rilievo, ruvidezza, metallo) o la luce del 20 naturale. */
+type PennelloGemma = { tela: 'colore'; gemma: Gemma; corpo: string } | { tela: 'dati'; corpo: string } | { tela: 'luce'; gemma: Gemma };
 
 function impianto(forma: Forma): Impianto {
   let im = impianti.get(forma);
@@ -414,7 +584,8 @@ function dipingiVene(ctx: CanvasRenderingContext2D, forma: Forma, im: Impianto, 
         const z = (c[2] + destra[2] * a + alto[2] * su) * vene.fitte;
         // Le nuvole si piegano l'una sull'altra: il punto si sposta di quanto dice un secondo rumore.
         const t = nuvola(x + 2.4 * nuvola(x + 5.2, y + 1.3, z + 7.1), y + 2.4 * nuvola(x + 1.7, y + 9.2, z + 3.3), z + 2.4 * nuvola(x + 8.3, y + 2.8, z + 4.9));
-        const quanto = gradino((t - 0.32) / 0.36);
+        // Con le bande il colore va e viene lungo le nuvole, in anelli che le seguono.
+        const quanto = vene.bande ? gradino(0.5 + 0.9 * Math.sin(2 * Math.PI * vene.bande * t)) : gradino((t - 0.32) / 0.36);
         // La vena corre dove i due colori si incontrano.
         const filo = vene.forza * gradino((1 - Math.abs(2 * quanto - 1) - 0.72) / 0.26);
         const o = (py * TELA_VENE + px) * 4;
@@ -454,6 +625,7 @@ function disegno(forma: Forma, ruolo: Ruolo, serie: Serie): Disegno {
       // L'angolo da cui gli spigoli prendono il colore resta del colore del corpo.
       ctx.fillRect(0, 0, MARGINE - 1, MARGINE - 1);
     }
+    if (pennello.brillantini) spargiBrillantini(ctx, im, pennello.brillantini);
     for (let i = 0; i < piani.length; i++) {
       const [cx, cy] = cella(i);
       const { punti } = piani[i]!;
@@ -463,6 +635,8 @@ function disegno(forma: Forma, ruolo: Ruolo, serie: Serie): Disegno {
           const [x, y] = punti[j]!;
           scrivi(ctx, String(g.valoriVertici![vi]), cx + x * k * 0.54, cy - y * k * 0.54, Math.atan2(x, y), raggio * CIFRE[forma], raggio * 1.1, pennello.numeri, pennello.contorno);
         });
+      } else if (pennello.gemma && forma === 'd20' && g.letture[i] === 20) {
+        incastona(ctx, pennello.gemma, cx, cy, punti, k, raggio);
       } else {
         scrivi(ctx, etichetta(forma, ruolo, g.letture[i]!), cx, cy, 0, raggio * CIFRE[forma], raggio * 1.7, pennello.numeri, pennello.contorno);
       }
@@ -474,16 +648,171 @@ function disegno(forma: Forma, ruolo: Ruolo, serie: Serie): Disegno {
   // Il seme delle vene viene dal nome del dado: ogni tipo ha le sue, sempre quelle.
   let seme = 2166136261;
   for (const c of chiave) seme = Math.imul(seme ^ c.charCodeAt(0), 16777619);
-  const colore = new THREE.CanvasTexture(dipingi(1, { fondo: aspetto.corpo, numeri: aspetto.numeri, contorno: aspetto.contorno, vene: aspetto.vene, seme }));
+  const gemma = aspetto.gemma;
+  // Gli stessi brillantini, negli stessi posti, sulla tela del colore (chiari) e su quella dei dati (lisci e di metallo).
+  const b = aspetto.brillantini;
+  const colore = new THREE.CanvasTexture(
+    dipingi(1, {
+      fondo: aspetto.corpo,
+      numeri: aspetto.numeri,
+      contorno: aspetto.contorno,
+      vene: aspetto.vene,
+      seme,
+      gemma: gemma && { tela: 'colore', gemma, corpo: aspetto.corpo },
+      brillantini: b && { colore: b.colore, quanti: b.quanti, seme },
+    }),
+  );
   colore.colorSpace = THREE.SRGBColorSpace;
-  const dati = new THREE.CanvasTexture(dipingi(SCALA_DATI, { fondo: aspetto.datiCorpo, numeri: aspetto.datiNumeri }));
-  const luce = new THREE.CanvasTexture(dipingi(SCALA_DATI, { fondo: '#000000', numeri: '#ffffff' }));
+  const dati = new THREE.CanvasTexture(
+    dipingi(SCALA_DATI, {
+      fondo: aspetto.datiCorpo,
+      numeri: aspetto.datiNumeri,
+      gemma: gemma && { tela: 'dati', corpo: aspetto.datiCorpo },
+      brillantini: b && { colore: 'rgb(255, 25, 255)', quanti: b.quanti, seme },
+    }),
+  );
+  const luce = new THREE.CanvasTexture(dipingi(SCALA_DATI, { fondo: '#000000', numeri: '#ffffff', gemma: gemma && { tela: 'luce', gemma } }));
   luce.colorSpace = THREE.SRGBColorSpace;
   for (const tx of [colore, dati, luce]) tx.anisotropy = anisotropia;
 
   d = { colore, dati, luce, materiali: new Map() };
   disegni.set(chiave, d);
   return d;
+}
+
+/**
+ * Brillantini sparsi su tutta la tela, sotto i numeri: puntini di grandezza diversa, nei posti dati dal seme,
+ * così le tele del colore e dei dati li hanno negli stessi punti.
+ */
+function spargiBrillantini(ctx: CanvasRenderingContext2D, im: Impianto, b: { colore: string; quanti: number; seme: number }): void {
+  let stato = b.seme >>> 0 || 1;
+  const caso = () => {
+    // xorshift32: abbastanza per dei puntini, e uguale su ogni tela.
+    stato ^= stato << 13;
+    stato ^= stato >>> 17;
+    stato ^= stato << 5;
+    return (stato >>> 0) / 4294967296;
+  };
+  const quanti = Math.round((b.quanti * im.larghezza * im.altezza) / (CELLA * CELLA));
+  ctx.save();
+  ctx.fillStyle = b.colore;
+  for (let i = 0; i < quanti; i++) {
+    const x = caso() * im.larghezza;
+    const y = caso() * im.altezza;
+    const r = 1.8 + caso() * caso() * 4.5;
+    ctx.globalAlpha = 0.45 + caso() * 0.55;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, 2 * Math.PI);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+/** Quanto è grande il castone rispetto alla faccia, e la gemma rispetto al raggio inscritto della faccia. */
+const CASTONE = 0.8;
+const CASTONE_DENTRO = 0.7;
+const GEMMA = 0.62;
+/** La tavola della gemma (la faccetta piana in cima), in frazione del suo raggio. */
+const TAVOLA = 0.46;
+/**
+ * Quanta luce rimanda ognuna delle sedici faccette, da 0 (la scura) a 1 (la chiara): irregolare come in una
+ * pietra vera, dove ogni faccetta prende la luce da un'altra parte.
+ */
+const LUCE_DELLE_FACCETTE = [0.95, 0.3, 0.7, 0.12, 0.85, 0.4, 0.55, 0.18, 0.9, 0.22, 0.65, 0.08, 0.78, 0.45, 0.6, 0.15];
+
+/**
+ * La gemma al posto del 20: un castone triangolare che scende a smusso dentro la faccia e, in mezzo, una pietra
+ * tonda a faccette (la tavola piana in cima, sedici faccette intorno che scendono verso il bordo). Sulla tela
+ * dei dati il castone è più basso del corpo e la pietra sale fino alla tavola, liscia e senza metallo:
+ * il rilievo dà alle faccette la loro luce, che cambia mentre il dado gira. Sulla tela della luce la pietra
+ * ha i suoi colori, faccette comprese: col 20 naturale si accende blu, e resta una pietra.
+ */
+function incastona(ctx: CanvasRenderingContext2D, p: PennelloGemma, cx: number, cy: number, punti: readonly [number, number][], k: number, raggio: number): void {
+  const triangolo = (s: number) => {
+    ctx.beginPath();
+    punti.forEach(([x, y], j) => (j === 0 ? ctx.moveTo(cx + x * k * s, cy - y * k * s) : ctx.lineTo(cx + x * k * s, cy - y * k * s)));
+    ctx.closePath();
+  };
+  // Il castone: lo smusso scende a gradini fitti, così il rilievo è una rampa e non uno scalino.
+  const gradini = 10;
+  for (let j = 0; j <= gradini; j++) {
+    const f = j / gradini;
+    triangolo(CASTONE - (CASTONE - CASTONE_DENTRO) * f);
+    if (p.tela === 'colore') ctx.fillStyle = mescola(p.corpo, '#5d636b', 0.18 + 0.12 * f);
+    else if (p.tela === 'dati') ctx.fillStyle = conRilievo(p.corpo, Math.round(255 - 70 * f));
+    else ctx.fillStyle = '#000000';
+    ctx.fill();
+  }
+
+  const rg = raggio * GEMMA;
+  const lato = Math.ceil(2 * rg) + 2;
+  const tela = document.createElement('canvas');
+  tela.width = lato;
+  tela.height = lato;
+  const pc = tela.getContext('2d');
+  if (!pc) throw new Error('canvas 2D non disponibile');
+  const immagine = pc.createImageData(lato, lato);
+  const fondo = terna(p.tela === 'dati' ? '#000000' : p.gemma.fondo);
+  const chiara = terna(p.tela === 'dati' ? '#000000' : p.gemma.chiara);
+  const scura = terna(p.tela === 'dati' ? '#000000' : p.gemma.scura);
+  const settore = (2 * Math.PI) / 16;
+  for (let py = 0; py < lato; py++) {
+    for (let px = 0; px < lato; px++) {
+      const dx = px + 0.5 - lato / 2;
+      const dy = py + 0.5 - lato / 2;
+      const r = Math.hypot(dx, dy);
+      // Il bordo della pietra sfuma su un pixel: niente scalette.
+      const copre = Math.min(1, Math.max(0, rg - r + 0.5));
+      if (copre <= 0) continue;
+      const a = Math.atan2(dy, dx);
+      // La faccetta in cui cade il pixel, e quanto ne dista dal centro lungo la sua normale: le faccette sono piane.
+      const f = Math.round(a / settore);
+      const lungo = r * Math.cos(a - f * settore);
+      const discesa = Math.min(1, Math.max(0, (lungo / rg - TAVOLA) / (1 - TAVOLA)));
+      const o = (py * lato + px) * 4;
+      let c: [number, number, number];
+      if (p.tela !== 'dati') {
+        const fra = (a: readonly number[], b: readonly number[], v: number) => [0, 1, 2].map((q) => a[q]! + (b[q]! - a[q]!) * v) as [number, number, number];
+        if (discesa <= 0) {
+          // La tavola: più chiara verso l'alto a sinistra, come la luce che passa dentro la pietra.
+          c = fra(fondo, chiara, Math.min(1, Math.max(0, 0.45 - (dx + dy) / (2.4 * rg))));
+        } else {
+          const luce = LUCE_DELLE_FACCETTE[((f % 16) + 16) % 16]!;
+          c = luce > 0.5 ? fra(fondo, chiara, (luce - 0.5) * 2 * (0.5 + 0.5 * discesa)) : fra(fondo, scura, (0.5 - luce) * 2);
+          // L'anello scuro intorno alla tavola e la cintura del bordo, sottili.
+          if (discesa < 0.12 || r > rg * 0.93) c = c.map((x) => x * 0.55) as [number, number, number];
+        }
+        // Un lampo di luce fermo in alto a sinistra, una stellina: piccolo, perché la pietra resti blu.
+        const lx = dx + 0.32 * rg;
+        const ly = dy + 0.36 * rg;
+        const stella = Math.max(0, 1 - Math.hypot(lx, ly) / (0.2 * rg)) ** 2 + Math.max(0, 1 - (Math.abs(lx) * 6 + Math.abs(ly)) / (0.5 * rg)) * Math.max(0, 1 - (Math.abs(ly) * 6 + Math.abs(lx)) / (0.5 * rg));
+        c = fra(c, [255, 255, 255], Math.min(1, stella));
+      } else {
+        // Rilievo dalla cintura (sopra il fondo del castone) alla tavola; liscia, e niente metallo: il blu della
+        // pietra lo deve dare la luce che la attraversa, non il riflesso della stanza.
+        c = [Math.round(255 - 70 * discesa), 30, 0];
+      }
+      immagine.data[o] = c[0];
+      immagine.data[o + 1] = c[1];
+      immagine.data[o + 2] = c[2];
+      immagine.data[o + 3] = Math.round(255 * copre);
+    }
+  }
+  pc.putImageData(immagine, 0, 0);
+  ctx.drawImage(tela, cx - lato / 2, cy - lato / 2);
+}
+
+/** Un colore fra `a` e `b`, a `quanto` da `a`. */
+function mescola(a: string, b: string, quanto: number): string {
+  const x = terna(a);
+  const y = terna(b);
+  return `rgb(${[0, 1, 2].map((q) => Math.round(x[q]! + (y[q]! - x[q]!) * quanto)).join(', ')})`;
+}
+
+/** Un colore della tela dei dati, `rgb(r, g, b)`, col rilievo cambiato e ruvidezza e metallo com'erano. */
+function conRilievo(dati: string, rilievo: number): string {
+  const [, g, b] = dati.match(/\d+/g)!.map(Number) as [number, number, number];
+  return `rgb(${rilievo}, ${g}, ${b})`;
 }
 
 /**

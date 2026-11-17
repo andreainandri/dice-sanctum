@@ -16,7 +16,7 @@ Tre pezzi, tutti sulla stessa macchina:
 
 - **il tavolo**: una pagina (Three.js per la scena, Rapier per la fisica) aperta in una finestra del browser;
 - **il ponte**: un processo Node su `127.0.0.1:4777` che serve la pagina, parla col tavolo, scrive il registro e risponde al server MCP;
-- **il server MCP** `dice-sanctum`: sei strumenti per il DM, e il canale che spinge i tiri nella sessione.
+- **il server MCP** `dice-sanctum`: sette strumenti per il DM, e il canale che spinge i tiri nella sessione.
 
 Ogni risultato esce dalla fisica: i dadi cadono nella torre con rotazione e velocità a caso, scendono da uno scivolo all'altro, escono dall'arco a rotolare nella corte, e il valore si legge dalla faccia che resta in alto. Il ponte controlla ogni tiro che riceve (formula, valori dei dadi, dadi tenuti, totale) prima di scriverlo.
 
@@ -101,15 +101,15 @@ tail -n0 -F ~/.local/share/dice-sanctum/tiri.jsonl | grep --line-buffered '"type
 - **Il risultato** sulla targa della torre, in cifre d'oro: il 20 naturale più acceso, col dado che si illumina per un momento, e l'1 naturale in rosso.
 - **La cronaca** a destra: ora, etichetta, formula, dadi (gli scartati attenuati), totale, e «chiesto dal DM» sui tiri delle richieste. Si riempie dal registro a ogni apertura della pagina, dall'ultimo PULISCI in poi.
 - **L'avviso del DM** in alto: «Il DM chiede: **Salvezza su Costituzione**, 1d20+3» col suo TIRA, che lancia esattamente quella formula con quell'etichetta. Con più richieste, la più vecchia sta in cima.
-- **I dadi del master**: quando il master tira in chiaro, i suoi dadi, sangue di bue marmorizzato coi numeri d'oro, escono dalla stessa torre e rotolano sul vassoio, con una riga che dice chi tira che cosa. A dadi fermi ogni tiro compare sulla targa con la sua etichetta e il suo totale, ed entra nella cronaca segnato «tiro del master». Il tiro di chi gioca non viene mai interrotto: il lancio del master aspetta che i dadi si fermino e lascia il tempo di leggerli. Quando il master tira dietro lo schermo, i dadi si sentono attutiti e la cronaca dice soltanto che ha tirato, senza etichetta, dadi o totale.
-- **Le serie di dadi**, in fondo al pannello: Perla azzurra (resina azzurra a nuvole, numeri d'argento) e Ossidiana e oro. La scelta resta da una visita all'altra. La serie del master è una sola e non si sceglie: a colpo d'occhio si sa di chi è il tiro.
-- **Il suono**: ogni urto dei dadi si sente, diverso sul velluto, sul legno e fra dado e dado, e chiuso finché i dadi sono dentro la torre. Il pulsante in alto a destra lo spegne e lo riaccende, e la scelta resta. Il browser lascia suonare una pagina soltanto dopo il primo clic o tasto.
+- **I dadi del master**: quando il master tira in chiaro, i suoi dadi (di partenza il sangue di bue marmorizzato coi numeri d'oro) escono dalla stessa torre e rotolano sul vassoio, con una riga che dice chi tira che cosa. A dadi fermi ogni tiro compare sulla targa con la sua etichetta e il suo totale, ed entra nella cronaca segnato «tiro del master». Il tiro di chi gioca non viene mai interrotto: il lancio del master aspetta che i dadi si fermino e lascia il tempo di leggerli. Quando il master tira dietro lo schermo, i dadi si sentono attutiti e la cronaca dice soltanto che ha tirato, senza etichetta, dadi o totale.
+- **Le serie di dadi**, in fondo al pannello, sono nove: Perla azzurra (resina azzurra a nuvole, numeri d'argento), Ossidiana e oro, Zaffiro (alluminio sabbiato coi numeri blu notte, e una gemma al posto del 20), Malachite (pietra verde a bande, numeri d'oro), Avorio (osso antico, numeri neri), Grafite e oro (carbone opaco, numeri d'oro pallido), Bufera (blu fumo a turbini d'argento, numeri bianchi), Carnevale (arancio zucca coi brillantini, numeri neri) e Sangue di bue. Una la tiene il master, che se la sceglie con `choose_dm_dice`: sparisce dalla scelta di chi gioca, e a colpo d'occhio si sa di chi è il tiro. La scelta resta da una visita all'altra; se il master prende proprio la serie che hai, i tuoi dadi passano alla serie dopo. Fisica ed equità sono le stesse per tutte.
+- **Il suono**: ogni urto dei dadi si sente, diverso sul velluto, sul legno e fra dado e dado, e chiuso finché i dadi sono dentro la torre. Anche la materia si sente: l'alluminio dello Zaffiro tintinna, la pietra della Malachite batte secca. Il pulsante in alto a destra lo spegne e lo riaccende, e la scelta resta. Il browser lascia suonare una pagina soltanto dopo il primo clic o tasto.
 - **Lo stato del collegamento** in alto a destra. I tiri fatti da scollegati aspettano in coda, tenuta nella memoria del browser e quindi anche a finestra chiusa, e partono da soli appena il ponte risponde, ciascuno una volta.
 - **I tiri che il master fa per te**, quando gli hai detto che non puoi stare al tavolo: dalla torre escono i tuoi dadi, con una riga che dice «Il master tira per te», il totale va sulla targa come per i tuoi tiri, e la cronaca li segna «tirato dal master per te».
 
 ![Un lancio che il master ha fatto al posto di chi gioca: due dadi di perla azzurra sul velluto, attacco e danni affiancati sulla targa, e in cronaca i due tiri segnati «tirato dal master per te», sopra il morso del lupo tirato dal master](docs/per-te.jpg)
 
-La pagina parla italiano o inglese, secondo la lingua del browser; `?lingua=it` o `?lingua=en` nell'indirizzo ne sceglie una. Si adatta alla finestra: sotto i 900 pixel di larghezza i dadi e la scelta della serie passano in una fascia sotto il vassoio e la cronaca si apre da un pulsante; nelle finestre alte e strette la torre si vede intera.
+La pagina parla italiano o inglese, secondo la lingua del browser; `?lingua=it` o `?lingua=en` nell'indirizzo ne sceglie una. Si adatta alla finestra: sotto i 900 pixel di larghezza i dadi e la scelta della serie passano in una fascia sotto il vassoio e la cronaca si apre da un pulsante; nelle finestre basse le serie diventano una griglia di campioni, col nome di quella scelta nel titolo; nelle finestre alte e strette la torre si vede intera.
 
 ### Come si scrivono i dadi
 
@@ -134,6 +134,7 @@ Le stesse cose, in breve, stanno nelle istruzioni del server MCP, che Claude Cod
 | `cancel_player_roll` | `requestId` | annullata; se era già tirata, il tiro |
 | `dm_roll` | `rolls` (da 1 a 8, ciascuno con `formula` e `label`), `secret?` | ogni tiro col suo seq, e dove è caduto il lancio: sul tavolo, dietro lo schermo, o senza tavolo collegato |
 | `roll_for_player` | `rolls` (da 1 a 8, ciascuno con `formula` e `label`) | ogni tiro col suo seq, se un tavolo ha mostrato il lancio, e le richieste rimaste aperte |
+| `choose_dm_dice` | `set` (una delle nove serie) | la serie del master, e se i tavoli collegati l'hanno già presa |
 
 - **Un tiro del personaggio** (un attacco, i danni, una salvezza, una prova che il giocatore vede): `request_player_roll` con `wait_seconds` fino a 110. La chiamata risponde col tiro: «Ada rolled r-0007: Constitution saving throw 1d20+3: [14] +3 = 17 (seq 42).» Mentre aspetta, la sessione è ferma su quella chiamata, e quello che il giocatore scrive in chat resta in coda finché la chiamata non torna. Per chiedere un tiro e intanto continuare a raccontare, `wait_seconds` 0.
 - **Se il tempo scade** prima del tiro, la risposta è «Waiting: …». La richiesta resta sul tavolo, e il tiro arriva dal canale quando cade.
@@ -141,6 +142,7 @@ Le stesse cose, in breve, stanno nelle istruzioni del server MCP, che Claude Cod
 - **Un tiro libero non soddisfa mai una richiesta**, anche con la stessa formula. Se il giocatore vuole tirare altro, il DM annulla con `cancel_player_roll` e chiede di nuovo.
 - **I dadi del master** (mostri, compagni, prove nascoste): `dm_roll`. I tiri di un turno vanno in una chiamata sola, attacco e danni insieme: cadono in un unico lancio di al più 30 dadi, e nella risposta ognuno ha la sua riga. In chiaro la chiamata torna quando i dadi si sono fermati sul tavolo di chi gioca, un secondo o due dopo; con `secret: true`, o senza tavolo aperto, torna subito e lo dice.
 - **`dm_roll` non tira mai i dadi di chi gioca e non soddisfa mai una richiesta.** I tiri del master tornano nella loro chiamata e restano fuori dal canale; `get_rolls` li elenca con tutto il resto.
+- **I dadi del master li sceglie il master**: `choose_dm_dice`, con una delle nove serie (la descrizione dello strumento dice com'è fatta ognuna). Il ponte la ricorda in `dadi-del-master.json`, accanto al registro, e la manda ai tavoli; `get_status` dice quale ha.
 - **Quando chi gioca non può stare al tavolo** e dice al master di tirare per lui: `roll_for_player`. Il ponte tira i dadi del personaggio con la stessa fisica, e ogni tiro entra nel registro come tiro di chi gioca, con `"rolledBy":"dm"`. Un tavolo collegato mostra il lancio coi dadi di chi gioca, mette il totale sulla targa dove vanno i suoi tiri, e in cronaca segna il tiro come tirato dal master per lui; senza tavolo aperto il tiro si fa e si registra lo stesso. Questi tiri tornano nella loro chiamata e restano fuori dal canale, e non soddisfano nessuna richiesta: una richiesta aperta resta sul tavolo finché il master non la annulla. Il master usa questo strumento soltanto sulla parola di chi gioca, per un tiro o finché non torna.
 - **Tornando a un tavolo rimasto nascosto**, chi gioca trova l'ultimo lancio fermo sul velluto col suo totale, e il resto in cronaca: un lancio che aspetta da più di 15 secondi di essere mostrato non si rivede rotolare.
 - **Dopo un'interruzione**, `get_rolls(since_seq)` restituisce tutto quello che è entrato nel registro nel frattempo.
@@ -202,7 +204,7 @@ Due bias trovati e tolti per strada. Il primo: Rapier costruisce il contatto di 
 ## Sviluppo
 
 ```sh
-npm test            # 199 prove: notazione, geometrie, fisica, ripresa, urti, eventi, ponte, dadi del master, server MCP, plugin
+npm test            # 219 prove: notazione, geometrie, fisica, ripresa, urti, eventi, ponte, dadi del master e la loro serie, server MCP, plugin
 npm run typecheck
 npm run build       # la pagina in dist/client
 npm run dev         # la pagina dal codice su 127.0.0.1:4778, senza ponte

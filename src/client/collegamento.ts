@@ -12,11 +12,14 @@ import {
   type VoceDiCronaca,
 } from '../shared/eventi.ts';
 import { type DalPonte, type DalTavolo, type ProblemaRichiesta } from '../shared/protocollo.ts';
+import { SERIE_DEL_MASTER_DI_PARTENZA, type Serie, eSerie } from '../shared/serie.ts';
 
 const CHIAVE_CODA = 'dice-sanctum.coda';
 const RIPROVA_MS = [500, 1000, 2000, 3000, 5000];
 
 export interface Osservatore {
+  /** La serie dei dadi del master, all'arrivo e ogni volta che la cambia. */
+  dadiDelMaster(serie: Serie): void;
   /** Collegato o no, e quanti tiri aspettano di arrivare al registro. */
   stato(collegato: boolean, inCoda: number): void;
   /** Le richieste del DM ancora da tirare, la più vecchia per prima. */
@@ -140,6 +143,8 @@ export class Collegamento {
         this.collegato = true;
         this.tentativi = 0;
         this.aperte = [...m.richieste];
+        // Un ponte di prima della scelta non la manda: il master ha i dadi di partenza.
+        this.osserva.dadiDelMaster(eSerie(m.dadiDelMaster) ? m.dadiDelMaster : SERIE_DEL_MASTER_DI_PARTENZA);
         this.osserva.cronaca(m.cronaca, this.coda);
         for (const t of this.coda) this.manda(t);
         this.aggiornaRichieste();
@@ -165,6 +170,10 @@ export class Collegamento {
       }
       case 'lancio del master': {
         if (Array.isArray(m.tiri) && m.tiri.length > 0) this.osserva.lancioDelMaster(m.tiri, m.ripresa);
+        break;
+      }
+      case 'dadi del master': {
+        if (eSerie(m.serie)) this.osserva.dadiDelMaster(m.serie);
         break;
       }
       case 'lancio per chi gioca': {
